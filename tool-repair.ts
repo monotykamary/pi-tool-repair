@@ -10,6 +10,10 @@
  *     - Strip regex anchors from JSON Schema patterns for models where they
  *       leak into generated values (e.g., Kimi K2 anchor bleed)
  *
+ *   Phase 1: Grammar leak repair (message_end hook, opt-in)
+ *     - Strip leaked XML/sentinel tool-call grammars from assistant text/thinking
+ *     - Recover complete, known-tool calls into pi toolCall blocks
+ *
  *   Phase 2: Validate-then-repair (tool_call hook)
  *     - Validate input against the tool's schema
  *     - On failure, walk the validator's issue list and apply targeted repairs
@@ -39,9 +43,14 @@ import {
   validateAgainstSchema,
   logRepair,
   BUILTIN_SCHEMAS,
+  loadGrammarRepairConfig,
+  repairAssistantMessageGrammarLeaks,
+  type MinimalAssistantMessage,
 } from "./src/index.js";
 
 export default function (pi: ExtensionAPI) {
+  const grammarRepairConfig = loadGrammarRepairConfig();
+
   // Phase 0: Schema poisoning defense (before_provider_request)
   // Strip regex anchors from JSON Schema patterns for models where they leak
   pi.on("before_provider_request", (event, ctx) => {
@@ -78,6 +87,38 @@ export default function (pi: ExtensionAPI) {
     if (modified) {
       return payload;
     }
+  });
+
+  // Phase 1: Grammar leak repair (message_end)
+  // Promote leaked XML/sentinel tool-call grammars from assistant text/thinking
+  // into pi toolCall blocks. Disabled by default and configured via
+  // ~/.pi/agent/extensions/pi-tool-repair.json.
+  pi.on("message_end", (event) => {
+    if (!grammarRepairConfig.enabled) return;
+    if (event.message.role !== "assistant") return;
+
+    const knownTools = new Set(
+      pi.getActiveTools()
+        .filter((name): name is string => typeof name === "string" && name.length > 0),
+    );
+
+    const result = repairAssistantMessageGrammarLeaks(
+      event.message as unknown as MinimalAssistantMessage,
+      grammarRepairConfig,
+      knownTools,
+    );
+
+    if (!result.changed) return;
+
+    if (grammarRepairConfig.debug) {
+      const calls = result.recoveredCalls.map((call) => `${call.grammar}:${call.name}`).join(",") || "none";
+      process.stderr.write(
+        `[pi-tool-repair] grammar-repair mode=${grammarRepairConfig.mode} ` +
+        `stripped=${result.strippedRanges} recovered=${calls}\n`,
+      );
+    }
+
+    return { message: result.message as any };
   });
 
   // Phase 2: Validate-then-repair (tool_call)
