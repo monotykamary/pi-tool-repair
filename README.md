@@ -35,7 +35,7 @@ _Fixes the finite set of tool-call mistakes open models make — before tools ex
 **With `pi install`** (recommended):
 
 ```bash
-pi install git:github.com/monotykamary/pi-tool-repair
+pi install https://github.com/monotykamary/pi-tool-repair
 ```
 
 **Manual** — add to `~/.pi/agent/settings.json`:
