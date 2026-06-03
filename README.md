@@ -37,7 +37,7 @@ Reverse-engineered from [Command Code](https://commandcode.ai/)'s tool parsing p
 **With `pi install`** (recommended):
 
 ```bash
-pi install git:github.com/monotykamary/pi-tool-repair
+pi install https://github.com/monotykamary/pi-tool-repair
 ```
 
 **Manual** — add to `~/.pi/agent/settings.json`:
