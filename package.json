@@ -1,0 +1,53 @@
+{
+  "name": "pi-tool-repair",
+  "version": "0.1.0",
+  "description": "Validate-then-repair extension for pi — fixes common LLM tool-call mistakes (null fields, stringified arrays, wrong field names, anchor bleed) before tools execute",
+  "type": "module",
+  "author": "Tom X Nguyen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monotykamary/pi-tool-repair.git"
+  },
+  "homepage": "https://github.com/monotykamary/pi-tool-repair#readme",
+  "bugs": {
+    "url": "https://github.com/monotykamary/pi-tool-repair/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "tool-repair",
+    "open-models",
+    "kimi",
+    "deepseek",
+    "validate-then-repair",
+    "anchor-bleed"
+  ],
+  "files": [
+    "*.ts",
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint:dead": "knip --no-gitignore"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.75.4",
+    "@types/node": "25.9.1",
+    "@vitest/coverage-v8": "4.1.7",
+    "knip": "6.14.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.7"
+  },
+  "pi": {
+    "extensions": [
+      "./tool-repair.ts"
+    ]
+  }
+}
