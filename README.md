@@ -18,6 +18,7 @@ _Fixes the finite set of tool-call mistakes open models make — before tools ex
 > By adding a thin repair layer, DeepSeek V4 Pro beat Opus 4.7 in 6/10 internal evals — without changing the model. The same four mistakes repeat across DeepSeek, GLM, Qwen, and others. Each fix is 30–100 lines. Order matters.
 
 Reverse-engineered from [Command Code](https://commandcode.ai/)'s tool parsing pipeline.
+
 ## What it fixes
 
 | Problem                       | Model sends                        | After repair                |
@@ -29,6 +30,7 @@ Reverse-engineered from [Command Code](https://commandcode.ai/)'s tool parsing p
 | Wrong field names             | `{"file_path": "/foo"}`            | `{"path": "/foo"}`          |
 | Bare string as root input     | `"/path/to/file"`                  | `{"path": "/path/to/file"}` |
 | Schema anchor bleed (Kimi K2) | `"^pattern$"` in values            | `"pattern"`                 |
+| Leaked tool grammar (opt-in)  | `<｜DSML｜tool_calls>...`          | pi `toolCall` block         |
 
 ## Install
 
@@ -73,6 +75,15 @@ Reload with `/reload` after any install method.
                            │
                            ▼
 ┌────────────────────────────────────────────────────────────┐
+│ Phase 1: Grammar leak repair (message_end, opt-in)         │
+│                                                            │
+│ Detect raw XML/sentinel tool grammars emitted as text or   │
+│ thinking, strip them from visible output, and recover them │
+│ as pi toolCall blocks when complete and safe.              │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────────┐
 │ Phase 2: Validate-then-repair (tool_call)                  │
 │                                                            │
 │  1. Validate input against schema (if known tool)          │
@@ -108,9 +119,51 @@ Preprocessing inputs before validation silently corrupts valid data — rewritin
 
 ## Configuration
 
+### Grammar leak repair (disabled by default)
+
+Raw XML/sentinel tool-call grammar recovery is opt-in because it can turn assistant text into tool execution. Enable it in `~/.pi/agent/extensions/pi-tool-repair.json`:
+
+```json
+{
+  "grammarRepair": {
+    "enabled": true,
+    "mode": "recover",
+    "requireKnownTool": true,
+    "grammars": [
+      "dsml",
+      "invoke",
+      "qwen",
+      "kimi",
+      "mistral",
+      "llama",
+      "glm",
+      "granite",
+      "minimax-text",
+      "olmo"
+    ]
+  }
+}
+```
+
+Modes:
+
+| Mode      | Behavior                                                       |
+| --------- | -------------------------------------------------------------- |
+| `recover` | Strip leaked markup and append recovered pi `toolCall` blocks. |
+| `strip`   | Strip leaked markup only; do not execute recovered calls.      |
+
+Safety gates:
+
+- `requireKnownTool: true` only recovers calls whose name is in pi's active tool registry.
+- Markup inside fenced code blocks is ignored so syntax discussions and examples are preserved.
+- Incomplete or unparseable blocks are left alone.
+- If the provider already emitted native `toolCall` blocks, leaked shadow text is stripped but duplicate calls are not added.
+
+Covered grammar families: DeepSeek DSML, MiniMax/Anthropic `<invoke>`, Qwen/Hermes `<tool_call>`, Kimi sentinels, Mistral `[TOOL_CALLS]`, Llama `<|python_tag|>`, GLM `arg_key`/`arg_value`, Granite JSON `<tool_call>`, MiniMax-Text-01 TypeScript calls, and OLMo3 `<function_calls>` pythonic calls. See [`docs/tool-call-grammar-leakage-survey.md`](./docs/tool-call-grammar-leakage-survey.md) for the survey.
+
 ### Debug logging
 
-Set `PI_TOOL_REPAIR_DEBUG=1` to log repair diagnostics to stderr:
+Set `PI_TOOL_REPAIR_DEBUG=1` or `grammarRepair.debug: true` to log repair diagnostics to stderr:
 
 ```
 [pi-tool-repair] tool=read outcome=recovered rules=dropNullOrUndefined hints=1
@@ -161,7 +214,7 @@ The extension maps common model mistakes (wrong field names) to the canonical fi
 
 ```bash
 npm install
-npm test              # run tests (59 tests)
+npm test              # run tests
 npm run test:watch    # watch mode
 npm run test:coverage # coverage report
 npm run typecheck     # type checking

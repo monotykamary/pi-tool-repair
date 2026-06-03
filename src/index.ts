@@ -490,6 +490,8 @@ export function validateAgainstSchema(
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 
+export * from "./grammar-repair.js";
+
 export function logRepair(
   toolName: string,
   outcome: "recovered" | "unrepairable",
