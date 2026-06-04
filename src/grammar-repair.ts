@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const GRAMMAR_NAMES = [
   "dsml",
@@ -109,7 +109,7 @@ export function loadGrammarRepairConfig(path = defaultConfigPath()): GrammarRepa
 }
 
 export function defaultConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "extensions", "pi-tool-repair.json");
+  return join(getAgentDir(), "extensions", "pi-tool-repair.json");
 }
 
 export function normalizeGrammarRepairConfig(raw: Partial<GrammarRepairConfig> = {}): GrammarRepairConfig {
