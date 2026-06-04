@@ -38,6 +38,12 @@ _Fixes the finite set of tool-call mistakes open models make — before tools ex
 pi install https://github.com/monotykamary/pi-tool-repair
 ```
 
+**With npm**:
+
+```bash
+npm install pi-tool-repair
+```
+
 **Manual** — add to `~/.pi/agent/settings.json`:
 
 ```json
