@@ -296,6 +296,42 @@ export function wrapRootStringAsObject(
   };
 }
 
+// ─── Phase 1.5: Phantom toolUse normalization ───────────────────────────────
+//
+// Some providers (notably vLLM-backed endpoints like z.ai and Lilac) intermittently
+// emit finish_reason: "tool_calls" without any delta.tool_calls chunks. Pi maps this
+// to stopReason: "toolUse" with zero toolCall blocks — a broken state where the
+// agent loop thinks it should execute tools but has nothing to run, causing an
+// "abrupt stop". Detect and normalize to stopReason: "stop" so the agent exits
+// cleanly.
+
+export interface PhantomToolUseResult {
+  changed: boolean;
+  message: MinimalAssistantMessage;
+}
+
+export function normalizePhantomToolUse(
+  message: MinimalAssistantMessage,
+): PhantomToolUseResult {
+  if (message.role !== "assistant") return { changed: false, message };
+  if (message.stopReason !== "toolUse") return { changed: false, message };
+
+  const content = message.content;
+  const hasToolCalls = Array.isArray(content) &&
+    content.some((block) => typeof block === "object" && block !== null && !Array.isArray(block) && (block as Record<string, unknown>).type === "toolCall");
+
+  if (hasToolCalls) return { changed: false, message };
+
+  return {
+    changed: true,
+    message: {
+      ...message,
+      stopReason: "error",
+      errorMessage: "stream ended before tool_calls were received (vLLM phantom tool_use)",
+    },
+  };
+}
+
 // ─── Deep clone ───────────────────────────────────────────────────────────────
 
 export function deepClone(value: unknown): unknown {

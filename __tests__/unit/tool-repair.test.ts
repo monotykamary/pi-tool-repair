@@ -15,6 +15,7 @@ import {
   repairToolInput,
   validateAgainstSchema,
   BUILTIN_SCHEMAS,
+  normalizePhantomToolUse,
   type RepairContext,
   type ValidationIssue,
 } from "../../src/index.js";
@@ -466,5 +467,83 @@ describe("repairToolInput", () => {
       "read",
     );
     expect(result.rulesFired).toHaveLength(0);
+  });
+});
+
+// ─── Phase 1.5: Phantom toolUse normalization ─────────────────────────────────
+
+describe("normalizePhantomToolUse", () => {
+  it("normalizes stopReason toolUse with zero toolCall blocks", () => {
+    const message = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "I'll call a tool" }],
+      stopReason: "toolUse",
+    };
+    const result = normalizePhantomToolUse(message);
+    expect(result.changed).toBe(true);
+    expect(result.message.stopReason).toBe("error");
+    expect((result.message as any).errorMessage).toMatch(/stream ended before/);
+  });
+
+  it("does not normalize when toolCall blocks exist", () => {
+    const message = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "" },
+        { type: "toolCall" as const, id: "call_1", name: "read", arguments: { path: "/foo" } },
+      ],
+      stopReason: "toolUse",
+    };
+    const result = normalizePhantomToolUse(message);
+    expect(result.changed).toBe(false);
+    expect(result.message.stopReason).toBe("toolUse");
+  });
+
+  it("does not normalize non-toolUse stopReason", () => {
+    const message = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "Done" }],
+      stopReason: "stop",
+    };
+    const result = normalizePhantomToolUse(message);
+    expect(result.changed).toBe(false);
+  });
+
+  it("does not normalize non-assistant messages", () => {
+    const message = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Hello" }],
+      stopReason: "toolUse",
+    } as any;
+    const result = normalizePhantomToolUse(message);
+    expect(result.changed).toBe(false);
+  });
+
+  it("normalizes with empty content array", () => {
+    const message = {
+      role: "assistant" as const,
+      content: [],
+      stopReason: "toolUse",
+    };
+    const result = normalizePhantomToolUse(message);
+    expect(result.changed).toBe(true);
+    expect(result.message.stopReason).toBe("error");
+    expect((result.message as any).errorMessage).toMatch(/stream ended before/);
+  });
+
+  it("preserves all other message fields", () => {
+    const message = {
+      role: "assistant" as const,
+      content: [{ type: "thinking" as const, thinking: "..." }],
+      stopReason: "toolUse",
+      usage: { input: 100, output: 50 },
+      model: "zai-org/glm-5.1",
+    };
+    const result = normalizePhantomToolUse(message);
+    expect(result.changed).toBe(true);
+    expect(result.message.stopReason).toBe("error");
+    expect((result.message as any).errorMessage).toMatch(/stream ended before/);
+    expect((result.message as any).usage).toEqual({ input: 100, output: 50 });
+    expect((result.message as any).model).toBe("zai-org/glm-5.1");
   });
 });

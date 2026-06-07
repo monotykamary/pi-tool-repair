@@ -14,6 +14,12 @@
  *     - Strip leaked XML/sentinel tool-call grammars from assistant text/thinking
  *     - Recover complete, known-tool calls into pi toolCall blocks
  *
+ *   Phase 1.5: Phantom toolUse normalization (message_end hook, always-on)
+ *     - Detect stopReason: "toolUse" with zero toolCall blocks
+ *     - Convert to a retryable error to trigger pi's auto-retry mechanism
+ *     - Guards against vLLM streaming bugs where finish_reason: "tool_calls"
+ *       is emitted without any delta.tool_calls chunks
+ *
  *   Phase 2: Validate-then-repair (tool_call hook)
  *     - Validate input against the tool's schema
  *     - On failure, walk the validator's issue list and apply targeted repairs
@@ -35,6 +41,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  DEFAULT_CONFIG,
   hasAnchorBleedBug,
   sanitizeSchemaAnchors,
   stripAnchorBleedInPlace,
@@ -45,6 +52,7 @@ import {
   BUILTIN_SCHEMAS,
   loadGrammarRepairConfig,
   repairAssistantMessageGrammarLeaks,
+  normalizePhantomToolUse,
   type MinimalAssistantMessage,
 } from "./src/index.js";
 
@@ -89,13 +97,61 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Phase 1: Grammar leak repair (message_end)
-  // Promote leaked XML/sentinel tool-call grammars from assistant text/thinking
-  // into pi toolCall blocks. Disabled by default and configured via
+  // Phase 1 + 1.5: Grammar leak repair + phantom toolUse normalization (message_end)
+  //
+  // Phase 1.5 (always-on): Detect stopReason: "toolUse" with zero toolCall blocks
+  // and convert to a retryable error (stopReason: "error"). This triggers pi's
+  // built-in auto-retry mechanism so the agent re-prompts automatically. This
+  // guards against vLLM streaming bugs where finish_reason: "tool_calls" is emitted
+  // without any delta.tool_calls chunks.
+  //
+  // Phase 1 (opt-in): Promote leaked XML/sentinel tool-call grammars from
+  // assistant text/thinking into pi toolCall blocks. Configured via
   // ~/.pi/agent/extensions/pi-tool-repair.json.
   pi.on("message_end", (event) => {
-    if (!grammarRepairConfig.enabled) return;
     if (event.message.role !== "assistant") return;
+
+    // Phase 1.5: Phantom toolUse normalization (always-on)
+    const currentMessage = event.message as unknown as MinimalAssistantMessage;
+    const phantomResult = normalizePhantomToolUse(currentMessage);
+
+    if (phantomResult.changed) {
+      if (DEFAULT_CONFIG.debug) {
+        process.stderr.write(
+          `[pi-tool-repair] phantom-tooluse: converted stopReason from "toolUse" to retryable error (no toolCall blocks)\n`,
+        );
+      }
+
+      // If grammar repair is also enabled, run it on the normalized message so
+      // it can still recover leaked tool calls from the text content. If grammar
+      // repair recovers calls, it will set stopReason back to "toolUse".
+      if (grammarRepairConfig.enabled) {
+        const knownTools = new Set(
+          pi.getActiveTools()
+            .filter((name): name is string => typeof name === "string" && name.length > 0),
+        );
+        const grammarResult = repairAssistantMessageGrammarLeaks(
+          phantomResult.message,
+          grammarRepairConfig,
+          knownTools,
+        );
+        if (grammarResult.changed) {
+          if (grammarRepairConfig.debug) {
+            const calls = grammarResult.recoveredCalls.map((call) => `${call.grammar}:${call.name}`).join(",") || "none";
+            process.stderr.write(
+              `[pi-tool-repair] grammar-repair mode=${grammarRepairConfig.mode} ` +
+              `stripped=${grammarResult.strippedRanges} recovered=${calls}\n`,
+            );
+          }
+          return { message: grammarResult.message as any };
+        }
+      }
+
+      return { message: phantomResult.message as any };
+    }
+
+    // Phase 1: Grammar leak repair (opt-in)
+    if (!grammarRepairConfig.enabled) return;
 
     const knownTools = new Set(
       pi.getActiveTools()
