@@ -56,13 +56,35 @@ import {
   type MinimalAssistantMessage,
 } from "./src/index.js";
 
+// Safely access ctx.model without throwing on stale contexts.
+// After session replacement (newSession/fork/switchSession/reload), the
+// extension runner invalidates stale contexts and ctx.model throws.
+// When that happens, the request belongs to a dead session — bail out.
+function safeGetModel(ctx: { model?: any }): any | undefined {
+  try {
+    return ctx.model;
+  } catch {
+    return undefined;
+  }
+}
+
+// Safely call pi.getActiveTools() without throwing on stale contexts.
+function safeGetActiveTools(pi: ExtensionAPI): string[] {
+  try {
+    return pi.getActiveTools();
+  } catch {
+    return [];
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   const grammarRepairConfig = loadGrammarRepairConfig();
 
   // Phase 0: Schema poisoning defense (before_provider_request)
   // Strip regex anchors from JSON Schema patterns for models where they leak
   pi.on("before_provider_request", (event, ctx) => {
-    if (!hasAnchorBleedBug(ctx.model)) return;
+    const model = safeGetModel(ctx);
+    if (!model || !hasAnchorBleedBug(model)) return;
 
     const payload = event.payload as Record<string, unknown>;
     if (!payload || typeof payload !== "object") return;
@@ -127,7 +149,7 @@ export default function (pi: ExtensionAPI) {
       // repair recovers calls, it will set stopReason back to "toolUse".
       if (grammarRepairConfig.enabled) {
         const knownTools = new Set(
-          pi.getActiveTools()
+          safeGetActiveTools(pi)
             .filter((name): name is string => typeof name === "string" && name.length > 0),
         );
         const grammarResult = repairAssistantMessageGrammarLeaks(
@@ -154,7 +176,7 @@ export default function (pi: ExtensionAPI) {
     if (!grammarRepairConfig.enabled) return;
 
     const knownTools = new Set(
-      pi.getActiveTools()
+      safeGetActiveTools(pi)
         .filter((name): name is string => typeof name === "string" && name.length > 0),
     );
 
@@ -182,8 +204,10 @@ export default function (pi: ExtensionAPI) {
     const toolName = event.toolName;
     const input = (event as any).input;
 
+    const model = safeGetModel(ctx);
+
     // Defense-in-depth: strip anchor-bleed from generated values
-    if (hasAnchorBleedBug(ctx.model)) {
+    if (model && hasAnchorBleedBug(model)) {
       if (input && typeof input === "object") {
         stripAnchorBleedInPlace(input);
       }
