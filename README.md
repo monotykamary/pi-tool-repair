@@ -43,7 +43,7 @@ pi install https://github.com/monotykamary/pi-tool-repair
 **With npm**:
 
 ```bash
-npm install pi-tool-repair
+npm install npm:pi-tool-repair
 ```
 
 **Manual** — add to `~/.pi/agent/settings.json`:
