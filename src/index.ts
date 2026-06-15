@@ -7,6 +7,8 @@
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
+import type { MinimalAssistantMessage } from "./grammar-repair.js";
+
 export interface RepairConfig {
   debug: boolean;
   anchorBleedModels: RegExp[];
