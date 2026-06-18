@@ -212,6 +212,19 @@ write_file(path="/tmp/a", content="hello", overwrite=True)
   });
 });
 
+// Truncated / dangling DSML markers — stream died mid-token. These can never
+// be recovered as tool calls (incomplete), but the raw marker should not
+// persist as visible assistant text. Covered for issue #3712.
+describe("DSML dangling marker stripping", () => {
+  it("does not report a truncated DSML open marker as a recovered call", () => {
+    expect(parseToolGrammarLeaks("I'll read the file.\n<｜DSML｜tool_calls", ["dsml"])).toEqual([]);
+  });
+
+  it("does not report orphan markers from a truncated body as recovered calls", () => {
+    expect(parseToolGrammarLeaks("<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read\">", ["dsml"])).toEqual([]);
+  });
+});
+
 describe("assistant message grammar repair", () => {
   it("strips leaked text and appends a recovered toolCall", () => {
     const message: MinimalAssistantMessage = {
@@ -258,5 +271,89 @@ describe("assistant message grammar repair", () => {
 
     const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["bash"]));
     expect(result.changed).toBe(false);
+  });
+
+  it("strips a truncated DSML open marker (stream died mid-token, issue #3712)", () => {
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "I'll read the file.\n<｜DSML｜tool_calls" }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["read"]));
+    expect(result.changed).toBe(true);
+    expect(result.recoveredCalls).toEqual([]);
+    expect(result.message.stopReason).toBe("stop");
+    expect(result.message.content).toEqual([{ type: "text", text: "I'll read the file." }]);
+  });
+
+  it("strips orphan DSML markers from a truncated body without recovering a call", () => {
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{
+        type: "text",
+        text: "I'll inspect.\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"read\">\n<｜DSML｜parameter name=\"path\" string=\"true\">/foo",
+      }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["read"]));
+    expect(result.changed).toBe(true);
+    expect(result.recoveredCalls).toEqual([]);
+    expect(result.message.stopReason).toBe("stop");
+    const text = (result.message.content[0] as { text: string }).text;
+    expect(text).not.toContain("DSML");
+    expect(text).toContain("I'll inspect.");
+    expect(text).toContain("/foo");
+  });
+
+  it("strips dangling DSML markers in strip mode too", () => {
+    const stripConfig: GrammarRepairConfig = { ...enabledConfig, mode: "strip" };
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "hi\n<｜DSML｜tool_calls" }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, stripConfig, new Set());
+    expect(result.changed).toBe(true);
+    expect((result.message.content[0] as { text: string }).text).toBe("hi");
+  });
+
+  it("does not strip a truncated DSML marker inside a code fence", () => {
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "```\n<｜DSML｜tool_calls\n```" }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["read"]));
+    expect(result.changed).toBe(false);
+  });
+
+  it("does not double-strip dangling markers already covered by a complete DSML block", () => {
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{
+        type: "text",
+        text: `prefix
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="bash">
+<｜DSML｜parameter name="command" string="true">pwd</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>`,
+      }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["bash"]));
+    expect(result.recoveredCalls).toHaveLength(1);
+    expect(result.recoveredCalls[0]).toEqual({ grammar: "dsml", name: "bash", arguments: { command: "pwd" } });
+    expect((result.message.content[0] as { text: string }).text).toBe("prefix");
   });
 });

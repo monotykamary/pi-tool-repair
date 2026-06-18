@@ -38,6 +38,7 @@ export interface RecoveredToolCall {
 
 interface Candidate extends RecoveredToolCall {
   range: Range;
+  stripOnly?: boolean;
 }
 
 interface Range {
@@ -147,13 +148,14 @@ export function repairAssistantMessageGrammarLeaks(
     if (text === undefined) return part;
 
     const candidates = selectCandidates(parseToolGrammarCandidates(text, enabled))
-      .filter((candidate) => isAllowedTool(candidate.name, config, knownTools));
+      .filter((candidate) => candidate.stripOnly || isAllowedTool(candidate.name, config, knownTools));
 
     if (candidates.length === 0) return part;
 
     strippedRanges += candidates.length;
     changed = true;
     for (const candidate of candidates) {
+      if (candidate.stripOnly) continue;
       recoveredCalls.push({
         name: candidate.name,
         arguments: candidate.arguments,
@@ -201,16 +203,21 @@ export function repairAssistantMessageGrammarLeaks(
 
 export function parseToolGrammarLeaks(text: string, grammars: Iterable<GrammarName> = ALL_GRAMMARS): RecoveredToolCall[] {
   const enabled = new Set(grammars);
-  return selectCandidates(parseToolGrammarCandidates(text, enabled)).map((candidate) => ({
-    name: candidate.name,
-    arguments: candidate.arguments,
-    grammar: candidate.grammar,
-  }));
+  return selectCandidates(parseToolGrammarCandidates(text, enabled))
+    .filter((candidate) => !candidate.stripOnly)
+    .map((candidate) => ({
+      name: candidate.name,
+      arguments: candidate.arguments,
+      grammar: candidate.grammar,
+    }));
 }
 
 function parseToolGrammarCandidates(text: string, enabled: Set<GrammarName>): Candidate[] {
   const candidates: Candidate[] = [];
-  if (enabled.has("dsml")) candidates.push(...parseDsml(text));
+  if (enabled.has("dsml")) {
+    candidates.push(...parseDsml(text));
+    candidates.push(...parseDsmlDanglingMarkers(text));
+  }
   if (enabled.has("kimi")) candidates.push(...parseKimi(text));
   if (enabled.has("mistral")) {
     candidates.push(...parseMistral(text));
@@ -249,6 +256,28 @@ function parseDsml(text: string): Candidate[] {
     }
   }
 
+  return candidates;
+}
+
+function parseDsmlDanglingMarkers(text: string): Candidate[] {
+  if (!text.includes("DSML")) return [];
+  const prefix = "(?:｜{1,2}DSML｜{1,2}|DSML｜|\\s*\\|\\s*DSML\\s*\\|\\s*)";
+  const markerRe = new RegExp(
+    `</?${prefix}(?:tool_calls|function_calls|invoke|parameter)(?:\\s+[^>\\n]*)?>?`,
+    "giu",
+  );
+  const candidates: Candidate[] = [];
+  for (const match of text.matchAll(markerRe)) {
+    if (match.index === undefined) continue;
+    if (isInsideCodeFence(text, match.index)) continue;
+    candidates.push({
+      name: "",
+      arguments: {},
+      grammar: "dsml",
+      range: { start: match.index, end: match.index + match[0].length },
+      stripOnly: true,
+    });
+  }
   return candidates;
 }
 
