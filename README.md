@@ -168,7 +168,7 @@ Safety gates:
 
 - `requireKnownTool: true` only recovers calls whose name is in pi's active tool registry.
 - Markup inside fenced code blocks is ignored so syntax discussions and examples are preserved.
-- Incomplete or unparseable blocks are left alone.
+- Incomplete or unparseable blocks are not recovered as tool calls. For DSML, dangling or truncated marker tokens (e.g. a stream that died at `<｜DSML｜tool_calls` with no closing `>`) are still stripped from visible text so the raw marker doesn't persist in the transcript.
 - If the provider already emitted native `toolCall` blocks, leaked shadow text is stripped but duplicate calls are not added.
 
 Covered grammar families: DeepSeek DSML, MiniMax/Anthropic `<invoke>`, Qwen/Hermes `<tool_call>`, Kimi sentinels, Mistral `[TOOL_CALLS]`, Llama `<|python_tag|>`, GLM `arg_key`/`arg_value`, Granite JSON `<tool_call>`, MiniMax-Text-01 TypeScript calls, and OLMo3 `<function_calls>` pythonic calls. See [`docs/tool-call-grammar-leakage-survey.md`](./docs/tool-call-grammar-leakage-survey.md) for the survey.
