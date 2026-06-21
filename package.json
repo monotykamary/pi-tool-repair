@@ -52,5 +52,6 @@
     "extensions": [
       "./tool-repair.ts"
     ]
-  }
+  },
+  "packageManager": "pnpm@11.6.0"
 }
