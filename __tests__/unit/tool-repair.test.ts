@@ -332,8 +332,23 @@ describe("stripGrammarTokenLeaksInPlace", () => {
 
   it("leaves normal keys and values unchanged", () => {
     const obj: Record<string, unknown> = { command: "pwd" };
-    stripGrammarTokenLeaksInPlace(obj);
+    const changed = stripGrammarTokenLeaksInPlace(obj);
+    expect(changed).toBe(false);
     expect(obj).toEqual({ command: "pwd" });
+  });
+
+  it("returns true when a key is repaired", () => {
+    const obj: Record<string, unknown> = { "<arg_key>command": "pwd" };
+    const changed = stripGrammarTokenLeaksInPlace(obj);
+    expect(changed).toBe(true);
+  });
+
+  it("returns true when a nested object is repaired", () => {
+    const obj: Record<string, unknown> = {
+      nested: { "<arg_key>command": "pwd" },
+    };
+    const changed = stripGrammarTokenLeaksInPlace(obj);
+    expect(changed).toBe(true);
   });
 });
 
