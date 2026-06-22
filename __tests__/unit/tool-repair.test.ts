@@ -2,6 +2,7 @@ import {
   sanitizePattern,
   sanitizeSchemaAnchors,
   stripAnchorBleedInPlace,
+  stripGrammarTokenLeaksInPlace,
   hasAnchorBleedBug,
   renameAliasedField,
   dropNullOrUndefined,
@@ -291,6 +292,51 @@ describe("wrapBareStringAsArray", () => {
 
 // ─── Root-Level Repair ────────────────────────────────────────────────────────
 
+describe("stripGrammarTokenLeaksInPlace", () => {
+  it("strips <arg_key> prefix from parsed object keys", () => {
+    const obj: Record<string, unknown> = { "<arg_key>command": "pwd" };
+    stripGrammarTokenLeaksInPlace(obj);
+    expect(obj.command).toBe("pwd");
+    expect(obj["<arg_key>command"]).toBeUndefined();
+  });
+
+  it("strips <arg_value> prefix and suffix from string values", () => {
+    const obj: Record<string, unknown> = {
+      command: "<arg_value>echo hi</arg_value>",
+    };
+    stripGrammarTokenLeaksInPlace(obj);
+    expect(obj.command).toBe("echo hi");
+  });
+
+  it("trims leftover whitespace after stripping", () => {
+    const obj: Record<string, unknown> = { "<arg_key> path ": "/tmp" };
+    stripGrammarTokenLeaksInPlace(obj);
+    expect(obj.path).toBe("/tmp");
+  });
+
+  it("recurses into nested objects", () => {
+    const obj: Record<string, unknown> = {
+      nested: { "<arg_key>command": "ls" },
+    };
+    stripGrammarTokenLeaksInPlace(obj);
+    expect((obj.nested as any).command).toBe("ls");
+  });
+
+  it("processes string array elements", () => {
+    const obj: Record<string, unknown> = {
+      include: ["<arg_value>a</arg_value>", "b"],
+    };
+    stripGrammarTokenLeaksInPlace(obj);
+    expect(obj.include).toEqual(["a", "b"]);
+  });
+
+  it("leaves normal keys and values unchanged", () => {
+    const obj: Record<string, unknown> = { command: "pwd" };
+    stripGrammarTokenLeaksInPlace(obj);
+    expect(obj).toEqual({ command: "pwd" });
+  });
+});
+
 describe("wrapRootStringAsObject", () => {
   it("wraps a bare string for a string-arg tool", () => {
     const result = wrapRootStringAsObject("/foo/bar", "read");
@@ -467,6 +513,17 @@ describe("repairToolInput", () => {
       "read",
     );
     expect(result.rulesFired).toHaveLength(0);
+  });
+});
+
+describe("grammar token leak repair in tool_call", () => {
+  it("repairs a GLM <arg_key> leak into the bash command key", () => {
+    const input: Record<string, unknown> = {
+      "<arg_key>command": "cat > /tmp/x",
+    };
+    stripGrammarTokenLeaksInPlace(input);
+    const issues = validateAgainstSchema(input, BUILTIN_SCHEMAS.bash);
+    expect(issues).toHaveLength(0);
   });
 });
 

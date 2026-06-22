@@ -45,6 +45,7 @@ import {
   hasAnchorBleedBug,
   sanitizeSchemaAnchors,
   stripAnchorBleedInPlace,
+  stripGrammarTokenLeaksInPlace,
   wrapRootStringAsObject,
   repairToolInput,
   validateAgainstSchema,
@@ -211,6 +212,12 @@ export default function (pi: ExtensionAPI) {
       if (input && typeof input === "object") {
         stripAnchorBleedInPlace(input);
       }
+    }
+
+    // Defense-in-depth: strip leaked grammar tokens (e.g. GLM <arg_key>) from
+    // parsed tool-call keys/values before the schema sees them.
+    if (input && typeof input === "object") {
+      stripGrammarTokenLeaksInPlace(input as Record<string, unknown>);
     }
 
     // Only repair built-in tools we have schemas for

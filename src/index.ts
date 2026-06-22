@@ -131,6 +131,67 @@ export function stripAnchorBleedInPlace(obj: Record<string, unknown>): void {
   }
 }
 
+// Leaked grammar markers from GLM/ChatGLM style tool-call grammars.
+// These can end up as literal prefixes/suffixes on parsed object keys
+// or string values instead of being interpreted as XML tags.
+const GRAMMAR_TOKEN_LEAKS = [
+  { tag: "<arg_key>", at: "start" as const },
+  { tag: "</arg_key>", at: "end" as const },
+  { tag: "<arg_value>", at: "start" as const },
+  { tag: "</arg_value>", at: "end" as const },
+];
+
+export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): void {
+  for (const key of Object.keys(obj)) {
+    const value = obj[key];
+    let newKey = key;
+    for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
+      if (at === "start" && newKey.startsWith(tag)) {
+        newKey = newKey.slice(tag.length);
+      } else if (at === "end" && newKey.endsWith(tag)) {
+        newKey = newKey.slice(0, -tag.length);
+      }
+    }
+    newKey = newKey.trim();
+
+    if (newKey !== key) {
+      obj[newKey] = value;
+      delete obj[key];
+    }
+
+    if (typeof value === "string") {
+      let s = value;
+      for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
+        if (at === "start" && s.startsWith(tag)) {
+          s = s.slice(tag.length);
+        } else if (at === "end" && s.endsWith(tag)) {
+          s = s.slice(0, -tag.length);
+        }
+      }
+      obj[newKey] = s.trim();
+    } else if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        const item = value[i];
+        if (typeof item === "string") {
+          let s = item;
+          for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
+            if (at === "start" && s.startsWith(tag)) {
+              s = s.slice(tag.length);
+            } else if (at === "end" && s.endsWith(tag)) {
+              s = s.slice(0, -tag.length);
+            }
+          }
+          value[i] = s.trim();
+        } else if (item && typeof item === "object") {
+          stripGrammarTokenLeaksInPlace(item as Record<string, unknown>);
+        }
+      }
+    } else if (value && typeof value === "object") {
+      stripGrammarTokenLeaksInPlace(value as Record<string, unknown>);
+    }
+  }
+}
+
 // ─── Phase 2: Repair Rules ────────────────────────────────────────────────────
 
 export interface RepairResult {
