@@ -134,8 +134,31 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", (event) => {
     if (event.message.role !== "assistant") return;
 
-    // Phase 1.5: Phantom toolUse normalization (always-on)
     const currentMessage = event.message as unknown as MinimalAssistantMessage;
+
+    // Phase 1.4: Strip leaked grammar tokens from existing pi toolCall blocks.
+    // These can leak from GLM-style grammars straight into the parsed argument
+    // keys (e.g. "<arg_key>command" instead of "command"). We have to repair
+    // them here, before pi preflights and validates the tool calls.
+    let toolCallArgsChanged = false;
+    if (Array.isArray(currentMessage.content)) {
+      for (const part of currentMessage.content) {
+        if (
+          part && typeof part === "object" && !Array.isArray(part) &&
+          (part as Record<string, unknown>).type === "toolCall"
+        ) {
+          const args = (part as Record<string, unknown>).arguments;
+          if (
+            args && typeof args === "object" && !Array.isArray(args) &&
+            stripGrammarTokenLeaksInPlace(args as Record<string, unknown>)
+          ) {
+            toolCallArgsChanged = true;
+          }
+        }
+      }
+    }
+
+    // Phase 1.5: Phantom toolUse normalization (always-on)
     const phantomResult = normalizePhantomToolUse(currentMessage);
 
     if (phantomResult.changed) {
@@ -174,7 +197,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Phase 1: Grammar leak repair (opt-in)
-    if (!grammarRepairConfig.enabled) return;
+    if (!grammarRepairConfig.enabled) {
+      if (toolCallArgsChanged) return { message: currentMessage as any };
+      return;
+    }
 
     const knownTools = new Set(
       safeGetActiveTools(pi)
@@ -187,9 +213,9 @@ export default function (pi: ExtensionAPI) {
       knownTools,
     );
 
-    if (!result.changed) return;
+    if (!result.changed && !toolCallArgsChanged) return;
 
-    if (grammarRepairConfig.debug) {
+    if (grammarRepairConfig.debug && result.changed) {
       const calls = result.recoveredCalls.map((call) => `${call.grammar}:${call.name}`).join(",") || "none";
       process.stderr.write(
         `[pi-tool-repair] grammar-repair mode=${grammarRepairConfig.mode} ` +

@@ -141,7 +141,8 @@ const GRAMMAR_TOKEN_LEAKS = [
   { tag: "</arg_value>", at: "end" as const },
 ];
 
-export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): void {
+export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): boolean {
+  let changed = false;
   for (const key of Object.keys(obj)) {
     const value = obj[key];
     let newKey = key;
@@ -157,6 +158,7 @@ export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): voi
     if (newKey !== key) {
       obj[newKey] = value;
       delete obj[key];
+      changed = true;
     }
 
     if (typeof value === "string") {
@@ -168,7 +170,11 @@ export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): voi
           s = s.slice(0, -tag.length);
         }
       }
-      obj[newKey] = s.trim();
+      const trimmed = s.trim();
+      if (trimmed !== value) {
+        obj[newKey] = trimmed;
+        changed = true;
+      }
     } else if (Array.isArray(value)) {
       for (let i = 0; i < value.length; i++) {
         const item = value[i];
@@ -181,15 +187,22 @@ export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): voi
               s = s.slice(0, -tag.length);
             }
           }
-          value[i] = s.trim();
+          const trimmed = s.trim();
+          if (trimmed !== item) {
+            value[i] = trimmed;
+            changed = true;
+          }
         } else if (item && typeof item === "object") {
-          stripGrammarTokenLeaksInPlace(item as Record<string, unknown>);
+          const nestedChanged = stripGrammarTokenLeaksInPlace(item as Record<string, unknown>);
+          if (nestedChanged) changed = true;
         }
       }
     } else if (value && typeof value === "object") {
-      stripGrammarTokenLeaksInPlace(value as Record<string, unknown>);
+      const nestedChanged = stripGrammarTokenLeaksInPlace(value as Record<string, unknown>);
+      if (nestedChanged) changed = true;
     }
   }
+  return changed;
 }
 
 // ─── Phase 2: Repair Rules ────────────────────────────────────────────────────
