@@ -156,6 +156,21 @@ export function repairAssistantMessageGrammarLeaks(
     changed = true;
     for (const candidate of candidates) {
       if (candidate.stripOnly) continue;
+
+      // Safety: don't recover tool calls whose grammar parsed to an empty
+      // argument object. These are almost always malformed GLM/XML fragments
+      // (e.g. `<tool_call>write</tool_call>`) that would otherwise crash as a
+      // real tool invocation with missing required properties.
+      if (Object.keys(candidate.arguments).length === 0) {
+        if (config.debug) {
+          process.stderr.write(
+            `[pi-tool-repair] grammar-repair skipping ${candidate.grammar}:${candidate.name} ` +
+            "(empty arguments, likely malformed grammar)\n",
+          );
+        }
+        continue;
+      }
+
       recoveredCalls.push({
         name: candidate.name,
         arguments: candidate.arguments,

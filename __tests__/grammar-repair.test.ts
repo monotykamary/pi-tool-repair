@@ -273,6 +273,24 @@ describe("assistant message grammar repair", () => {
     expect(result.changed).toBe(false);
   });
 
+  it("does not recover a call with empty arguments", () => {
+    // GLM-style empty tool calls (e.g. `<tool_call>write</tool_call>`) would
+    // otherwise be promoted to a native `toolCall` block with `{}` arguments,
+    // causing a validation error when pi tries to execute them. They should be
+    // stripped from the text but not recovered.
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: `<tool_call>write</tool_call>` }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["write"]));
+    expect(result.recoveredCalls).toEqual([]);
+    expect(result.message.stopReason).toBe("stop");
+    expect((result.message.content[0] as { text: string }).text).not.toContain("tool_call");
+  });
+
   it("strips a truncated DSML open marker (stream died mid-token, issue #3712)", () => {
     const message: MinimalAssistantMessage = {
       role: "assistant",
