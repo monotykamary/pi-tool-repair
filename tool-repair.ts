@@ -43,6 +43,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_CONFIG,
   hasAnchorBleedBug,
+  hasGrammarLeakBug,
   sanitizeSchemaAnchors,
   stripAnchorBleedInPlace,
   stripGrammarTokenLeaksInPlace,
@@ -240,9 +241,10 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Defense-in-depth: strip leaked grammar tokens (e.g. GLM <arg_key>) from
-    // parsed tool-call keys/values before the schema sees them.
-    if (input && typeof input === "object") {
+    // Strip leaked grammar tokens (e.g. GLM <arg_key>) from parsed tool-call
+    // keys/values before the schema sees them. Only for models known to produce
+    // grammar token leaks.
+    if (input && typeof input === "object" && model && hasGrammarLeakBug(model)) {
       stripGrammarTokenLeaksInPlace(input as Record<string, unknown>);
     }
 

@@ -12,6 +12,7 @@ import type { MinimalAssistantMessage } from "./grammar-repair.js";
 export interface RepairConfig {
   debug: boolean;
   anchorBleedModels: RegExp[];
+  grammarLeakModels: RegExp[];
   fieldAliases: Record<string, Record<string, string[]>>;
   stringArgTools: Record<string, { field: string; shape: "string" | "array" }>;
 }
@@ -21,6 +22,9 @@ export const DEFAULT_CONFIG: RepairConfig = {
   anchorBleedModels: [
     /kimi-k2/i,
     /minimax/i,
+    /glm/i,
+  ],
+  grammarLeakModels: [
     /glm/i,
   ],
   fieldAliases: {
@@ -78,6 +82,11 @@ export const DEFAULT_CONFIG: RepairConfig = {
 export function hasAnchorBleedBug(model: { id?: string } | null | undefined): boolean {
   if (!model || !model.id) return false;
   return DEFAULT_CONFIG.anchorBleedModels.some((re) => re.test(model.id!));
+}
+
+export function hasGrammarLeakBug(model: { id?: string } | null | undefined): boolean {
+  if (!model || !model.id) return false;
+  return DEFAULT_CONFIG.grammarLeakModels.some((re) => re.test(model.id!));
 }
 
 export function sanitizePattern(pattern: string): string | undefined {
