@@ -1,6 +1,6 @@
 {
   "name": "pi-tool-repair",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Validate-then-repair extension for pi — fixes common LLM tool-call mistakes (null fields, stringified arrays, wrong field names, anchor bleed) before tools execute",
   "type": "module",
   "author": "Tom X Nguyen",
