@@ -192,11 +192,13 @@ Repair rules apply to pi's built-in tools: `read`, `write`, `edit`, `bash`, `gre
 
 Phase 0 schema sanitization activates for models matching these patterns:
 
-| Pattern      | Models           |
-| ------------ | ---------------- |
-| `/kimi-k2/i` | Kimi K2 variants |
-| `/minimax/i` | MiniMax variants |
-| `/glm/i`     | GLM variants     |
+| Pattern           | Models                              |
+| ----------------- | ----------------------------------- |
+| `/kimi-k2/i`      | Kimi K2 variants                    |
+| `/moonshotai\/kimi/i` | Moonshot Kimi (direct API)      |
+| `/@cf\/.*kimi/i`  | @cf Kimi (e.g. `@cf/moonshotai/kimi-k2.6`) |
+| `/minimax/i`      | MiniMax variants                    |
+| `/glm/i`          | GLM variants                        |
 
 To add more models, edit `anchorBleedModels` in [`src/index.ts`](./src/index.ts).
 

@@ -113,6 +113,7 @@ export function defaultConfigPath(): string {
   return join(getAgentDir(), "extensions", "pi-tool-repair.json");
 }
 
+
 export function normalizeGrammarRepairConfig(raw: Partial<GrammarRepairConfig> = {}): GrammarRepairConfig {
   const grammarSet = new Set<GrammarName>(ALL_GRAMMARS);
   const grammars = Array.isArray(raw.grammars)
@@ -234,6 +235,9 @@ function parseToolGrammarCandidates(text: string, enabled: Set<GrammarName>): Ca
     candidates.push(...parseDsmlDanglingMarkers(text));
   }
   if (enabled.has("kimi")) candidates.push(...parseKimi(text));
+  if (enabled.has("qwen") || enabled.has("granite") || enabled.has("kimi")) {
+    candidates.push(...parseOrphanToolCallClosers(text));
+  }
   if (enabled.has("mistral")) {
     candidates.push(...parseMistral(text));
     candidates.push(...parseBareJsonToolCalls(text, "mistral"));
@@ -378,6 +382,138 @@ function parseKimi(text: string): Candidate[] {
         range: { start: sectionStart, end: sectionStart + section[0].length },
       });
     }
+  }
+
+  candidates.push(...parseKimiLooseToolCallXml(text));
+  candidates.push(...parseKimiDanglingMarkers(text));
+  return candidates;
+}
+
+function parseKimiLooseToolCallXml(text: string): Candidate[] {
+  const candidates: Candidate[] = [];
+  const openRe = /<tool_call>/gi;
+
+  for (const match of text.matchAll(openRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+
+    const start = match.index;
+    const bodyStart = start + match[0].length;
+    if (findPattern(text, /<\/tool_call>/gi, bodyStart)) continue;
+
+    const looseClose = findPattern(
+      text,
+      /<\/(?:redacted_thinking|thinking)>/gi,
+      bodyStart,
+    );
+    if (!looseClose) continue;
+
+    const body = text.slice(bodyStart, looseClose.start);
+    for (const call of parseToolCallJsonBody(body, "kimi")) {
+      candidates.push({ ...call, range: { start, end: looseClose.end } });
+    }
+  }
+
+  return candidates;
+}
+
+function parseKimiDanglingMarkers(text: string): Candidate[] {
+  const candidates: Candidate[] = [];
+  const sectionOpenRe = /<\|(?:redacted_)?tool_calls?_section_begin\|>/gi;
+
+  for (const match of text.matchAll(sectionOpenRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+    const sectionStart = match.index;
+    if (findPattern(text, /<\|(?:redacted_)?tool_calls?_section_end\|>/gi, sectionStart)) continue;
+
+    const end = findBestKimiUnclosedEnd(text, sectionStart + match[0].length) ?? sectionStart + match[0].length;
+    candidates.push({
+      name: "",
+      arguments: {},
+      grammar: "kimi",
+      range: { start: sectionStart, end },
+      stripOnly: true,
+    });
+  }
+
+  const openRe = /<tool_call>/gi;
+  for (const match of text.matchAll(openRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+    const start = match.index;
+    const bodyStart = start + match[0].length;
+    const strictClose = findPattern(text, /<\/tool_call>/gi, bodyStart);
+    const looseClose = findPattern(text, /<\/(?:redacted_thinking|thinking)>/gi, bodyStart);
+    const close = strictClose ?? looseClose;
+    if (close && parseToolCallJsonBody(text.slice(bodyStart, close.start), "kimi").length > 0) continue;
+
+    candidates.push({
+      name: "",
+      arguments: {},
+      grammar: "kimi",
+      range: { start, end: close?.end ?? bodyStart },
+      stripOnly: true,
+    });
+  }
+
+  const markerRe = /<\|(?:redacted_)?tool_call(?:s)?(?:_section)?_(?:begin(?:_kimi)?|argument_begin|end(?:_kimi)?)\|>/gi;
+  for (const match of text.matchAll(markerRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (candidates.some((candidate) => rangesOverlap(candidate.range, range))) continue;
+    candidates.push({
+      name: "",
+      arguments: {},
+      grammar: "kimi",
+      range,
+      stripOnly: true,
+    });
+  }
+
+  return candidates;
+}
+
+function findBestKimiUnclosedEnd(text: string, from: number): number | undefined {
+  const markerRe = /<\|(?:redacted_)?tool_call(?:s)?(?:_section)?_(?:begin(?:_kimi)?|argument_begin|end(?:_kimi)?)\|>/gi;
+  markerRe.lastIndex = from;
+  let end: number | undefined;
+  for (;;) {
+    const match = markerRe.exec(text);
+    if (!match) break;
+    end = match.index + match[0].length;
+  }
+  if (end === undefined) return undefined;
+
+  const tail = text.slice(end);
+  const idMatch = /^\s*functions\.[A-Za-z_][\w.-]*:\d*/.exec(tail);
+  if (idMatch) end += idMatch[0].length;
+
+  const argMarker = findPattern(text, /<\|(?:redacted_)?tool_call_argument_begin\|>/gi, end);
+  if (argMarker) {
+    end = argMarker.end;
+    const json = extractFirstBalancedJson(text.slice(end));
+    if (json) end += json.end;
+  }
+
+  return end;
+}
+
+function parseOrphanToolCallClosers(text: string): Candidate[] {
+  const candidates: Candidate[] = [];
+  const closeRe = /<\/tool_call>\s*/gi;
+
+  for (const match of text.matchAll(closeRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+    const before = text.slice(0, match.index);
+    const opens = before.match(/<tool_call>/gi)?.length ?? 0;
+    const closes = before.match(/<\/tool_call>/gi)?.length ?? 0;
+    if (opens > closes) continue;
+
+    candidates.push({
+      name: "",
+      arguments: {},
+      grammar: "kimi",
+      range: { start: match.index, end: match.index + match[0].length },
+      stripOnly: true,
+    });
   }
 
   return candidates;

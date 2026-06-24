@@ -216,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 
     if (!result.changed && !toolCallArgsChanged) return;
 
-    if (grammarRepairConfig.debug && result.changed) {
+    if (grammarRepairConfig.debug) {
       const calls = result.recoveredCalls.map((call) => `${call.grammar}:${call.name}`).join(",") || "none";
       process.stderr.write(
         `[pi-tool-repair] grammar-repair mode=${grammarRepairConfig.mode} ` +
