@@ -20,7 +20,9 @@ export interface RepairConfig {
 export const DEFAULT_CONFIG: RepairConfig = {
   debug: Boolean(process.env.PI_TOOL_REPAIR_DEBUG),
   anchorBleedModels: [
-    /kimi-k2/i,
+    /kimi[-_]?k2/i,
+    /moonshotai\/kimi/i,
+    /@cf\/.*kimi/i,
     /minimax/i,
     /glm/i,
   ],

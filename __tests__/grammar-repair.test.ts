@@ -23,6 +23,7 @@ const enabledConfig: GrammarRepairConfig = {
   mode: "recover",
   requireKnownTool: true,
   debug: false,
+
 };
 
 describe("grammar leak parsing", () => {
@@ -104,6 +105,72 @@ describe("grammar leak parsing", () => {
     expect(calls).toEqual([
       { grammar: "kimi", name: "first", arguments: { a: 1 } },
       { grammar: "kimi", name: "second", arguments: { b: 2 } },
+    ]);
+  });
+
+  it("parses Kimi console tool_call closed only by redacted_thinking", () => {
+    const text = ` <tool_call> {"name": "bash", "arguments": {"command":"test"}}</${"redacted_thinking"}>`;
+    expect(parseToolGrammarLeaks(text, ["kimi"])).toEqual([
+      { grammar: "kimi", name: "bash", arguments: { command: "test" } },
+    ]);
+  });
+
+  it("strips dangling Kimi tool_call open markers", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I'll run this.\n<tool_call>\n" }],
+        stopReason: "stop",
+      },
+      { ...enabledConfig, grammars: ["kimi"] },
+      new Set(["bash"]),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.recoveredCalls).toEqual([]);
+    expect((result.message.content[0] as { text: string }).text).toBe("I'll run this.");
+  });
+
+  it("strips truncated Kimi sentinel markers", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      {
+        role: "assistant",
+        content: [{
+          type: "text",
+          text: "prefix\n<|tool_calls_section_begin|><|tool_call_begin|>functions.read:0",
+        }],
+        stopReason: "stop",
+      },
+      { ...enabledConfig, grammars: ["kimi"] },
+      new Set(["read"]),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.recoveredCalls).toEqual([]);
+    expect((result.message.content[0] as { text: string }).text).toBe("prefix");
+  });
+
+  it("recovers Kimi K2.6 session-style duplicate-close tool_call leaks", () => {
+    const text = `<tool_call>
+{"name": "bash", "arguments": {"command":"cd /tmp && grep -l 'tool_call' *.ts"}}"</tool_call>
+</tool_call>`;
+    const result = repairAssistantMessageGrammarLeaks(
+      {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason: "stop",
+      },
+      enabledConfig,
+      new Set(["bash"]),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.message.stopReason).toBe("toolUse");
+    expect(result.message.content).toEqual([
+      { type: "text", text: "" },
+      {
+        type: "toolCall",
+        id: expect.stringMatching(/^tool_repair_/),
+        name: "bash",
+        arguments: { command: "cd /tmp && grep -l 'tool_call' *.ts" },
+      },
     ]);
   });
 
@@ -375,3 +442,5 @@ describe("assistant message grammar repair", () => {
     expect((result.message.content[0] as { text: string }).text).toBe("prefix");
   });
 });
+
+
