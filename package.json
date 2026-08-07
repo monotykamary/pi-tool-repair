@@ -46,7 +46,12 @@
     "@vitest/coverage-v8": "4.1.7",
     "knip": "6.14.1",
     "typescript": "6.0.3",
+    "typebox": "1.3.7",
     "vitest": "4.1.7"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "pi": {
     "extensions": [

@@ -8,6 +8,10 @@
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 import type { MinimalAssistantMessage } from "./grammar-repair.js";
+import { Value } from "typebox/value";
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export interface RepairConfig {
   debug: boolean;
@@ -33,39 +37,51 @@ export const DEFAULT_CONFIG: RepairConfig = {
         "absolutePath", "file_path", "filePath", "filepath", "pathname",
         "target_file", "targetFile", "file", "absolute_path", "fileAbsolutePath",
       ],
+      offset: ["start"],
+      limit: ["max"],
     },
     grep: {
       pattern: ["query", "regex", "search", "q", "expression", "text"],
+      glob: ["globPattern"],
+      ignoreCase: ["ic", "caseInsensitive"],
+      context: ["ctx"],
+      limit: ["max"],
     },
     write: {
       path: [
         "absolutePath", "file_path", "filePath", "filepath", "pathname",
-        "target_file", "targetFile",
+        "target_file", "targetFile", "file", "absolute_path", "fileAbsolutePath",
       ],
       content: ["text", "body", "data", "contents", "fileContent"],
     },
     edit: {
       path: [
         "absolutePath", "file_path", "filePath", "filepath", "pathname",
-        "target_file", "targetFile",
+        "target_file", "targetFile", "file", "absolute_path", "fileAbsolutePath",
       ],
       oldText: [
         "old_string", "oldString", "old", "old_str", "oldStr", "from",
-        "old_value", "oldText", "old_text", "oldContent", "old_content",
+        "old_value", "old_text", "oldContent", "old_content",
       ],
       newText: [
-        "new_string", "newString", "new", "new_str", "newStr", "to",
-        "new_value", "newText", "new_text", "newContent", "new_content",
+        "new_string", "newString", "new", "replacement", "new_str", "newStr", "to",
+        "new_value", "new_text", "newContent", "new_content",
       ],
     },
     ls: {
-      path: ["absolutePath", "directory", "dir", "folder", "directoryPath"],
+      path: [
+        "absolutePath", "file_path", "filePath", "filepath", "pathname",
+        "target_file", "targetFile", "file", "absolute_path", "fileAbsolutePath",
+        "directory", "dir", "folder", "directoryPath",
+      ],
+      limit: ["max"],
     },
     find: {
-      pattern: ["query", "glob", "expression", "search", "include"],
+      pattern: ["query", "regex", "glob", "expression", "search", "include", "name", "filename"],
+      limit: ["max"],
     },
     bash: {
-      command: ["cmd", "shell", "script", "commandLine"],
+      command: ["cmd", "shell", "cmdline", "script", "commandLine"],
     },
   },
   stringArgTools: {
@@ -74,6 +90,7 @@ export const DEFAULT_CONFIG: RepairConfig = {
     bash: { field: "command", shape: "string" },
     read: { field: "path", shape: "string" },
     ls: { field: "path", shape: "string" },
+    fabric_exec: { field: "code", shape: "string" },
   },
 };
 
@@ -114,14 +131,18 @@ export function sanitizeSchemaAnchors(schema: unknown): unknown {
   return result;
 }
 
-export function stripAnchorBleedInPlace(obj: Record<string, unknown>): void {
+export function stripAnchorBleedInPlace(obj: Record<string, unknown>): boolean {
+  let changed = false;
   for (const key of Object.keys(obj)) {
     const value = obj[key];
     if (typeof value === "string") {
       let s = value;
       while (s.startsWith("^")) s = s.slice(1);
       while (s.endsWith("$")) s = s.slice(0, -1);
-      obj[key] = s;
+      if (s !== value) {
+        obj[key] = s;
+        changed = true;
+      }
     } else if (Array.isArray(value)) {
       for (let i = 0; i < value.length; i++) {
         const item = value[i];
@@ -129,15 +150,19 @@ export function stripAnchorBleedInPlace(obj: Record<string, unknown>): void {
           let s = item;
           while (s.startsWith("^")) s = s.slice(1);
           while (s.endsWith("$")) s = s.slice(0, -1);
-          value[i] = s;
+          if (s !== item) {
+            value[i] = s;
+            changed = true;
+          }
         } else if (item && typeof item === "object") {
-          stripAnchorBleedInPlace(item as Record<string, unknown>);
+          if (stripAnchorBleedInPlace(item as Record<string, unknown>)) changed = true;
         }
       }
     } else if (value && typeof value === "object") {
-      stripAnchorBleedInPlace(value as Record<string, unknown>);
+      if (stripAnchorBleedInPlace(value as Record<string, unknown>)) changed = true;
     }
   }
+  return changed;
 }
 
 // Leaked grammar markers from GLM/ChatGLM style tool-call grammars.
@@ -150,19 +175,26 @@ const GRAMMAR_TOKEN_LEAKS = [
   { tag: "</arg_value>", at: "end" as const },
 ];
 
+const stripBoundaryGrammarTokens = (value: string): string | undefined => {
+  let stripped = value;
+  let changed = false;
+  for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
+    if (at === "start" && stripped.startsWith(tag)) {
+      stripped = stripped.slice(tag.length);
+      changed = true;
+    } else if (at === "end" && stripped.endsWith(tag)) {
+      stripped = stripped.slice(0, -tag.length);
+      changed = true;
+    }
+  }
+  return changed ? stripped.trim() : undefined;
+};
+
 export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): boolean {
   let changed = false;
   for (const key of Object.keys(obj)) {
     const value = obj[key];
-    let newKey = key;
-    for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
-      if (at === "start" && newKey.startsWith(tag)) {
-        newKey = newKey.slice(tag.length);
-      } else if (at === "end" && newKey.endsWith(tag)) {
-        newKey = newKey.slice(0, -tag.length);
-      }
-    }
-    newKey = newKey.trim();
+    const newKey = stripBoundaryGrammarTokens(key) ?? key;
 
     if (newKey !== key) {
       obj[newKey] = value;
@@ -171,44 +203,26 @@ export function stripGrammarTokenLeaksInPlace(obj: Record<string, unknown>): boo
     }
 
     if (typeof value === "string") {
-      let s = value;
-      for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
-        if (at === "start" && s.startsWith(tag)) {
-          s = s.slice(tag.length);
-        } else if (at === "end" && s.endsWith(tag)) {
-          s = s.slice(0, -tag.length);
-        }
-      }
-      const trimmed = s.trim();
-      if (trimmed !== value) {
-        obj[newKey] = trimmed;
+      const stripped = stripBoundaryGrammarTokens(value);
+      if (stripped !== undefined) {
+        obj[newKey] = stripped;
         changed = true;
       }
     } else if (Array.isArray(value)) {
       for (let i = 0; i < value.length; i++) {
         const item = value[i];
         if (typeof item === "string") {
-          let s = item;
-          for (const { tag, at } of GRAMMAR_TOKEN_LEAKS) {
-            if (at === "start" && s.startsWith(tag)) {
-              s = s.slice(tag.length);
-            } else if (at === "end" && s.endsWith(tag)) {
-              s = s.slice(0, -tag.length);
-            }
-          }
-          const trimmed = s.trim();
-          if (trimmed !== item) {
-            value[i] = trimmed;
+          const stripped = stripBoundaryGrammarTokens(item);
+          if (stripped !== undefined) {
+            value[i] = stripped;
             changed = true;
           }
         } else if (item && typeof item === "object") {
-          const nestedChanged = stripGrammarTokenLeaksInPlace(item as Record<string, unknown>);
-          if (nestedChanged) changed = true;
+          if (stripGrammarTokenLeaksInPlace(item as Record<string, unknown>)) changed = true;
         }
       }
     } else if (value && typeof value === "object") {
-      const nestedChanged = stripGrammarTokenLeaksInPlace(value as Record<string, unknown>);
-      if (nestedChanged) changed = true;
+      if (stripGrammarTokenLeaksInPlace(value as Record<string, unknown>)) changed = true;
     }
   }
   return changed;
@@ -536,9 +550,7 @@ export const BUILTIN_SCHEMAS: Record<string, ToolSchema> = {
   },
   edit: {
     path: { type: "string", required: true },
-    oldText: { type: "string", required: true },
-    newText: { type: "string", required: true },
-    replaceAll: { type: "boolean" },
+    edits: { type: "array", required: true, items: { type: "object" } },
   },
   bash: {
     command: { type: "string", required: true },
@@ -546,13 +558,21 @@ export const BUILTIN_SCHEMAS: Record<string, ToolSchema> = {
   },
   grep: {
     pattern: { type: "string", required: true },
-    include: { type: "array", items: { type: "string" } },
+    path: { type: "string" },
+    glob: { type: "string" },
+    ignoreCase: { type: "boolean" },
+    literal: { type: "boolean" },
+    context: { type: "number" },
+    limit: { type: "number" },
   },
   find: {
     pattern: { type: "string", required: true },
+    path: { type: "string" },
+    limit: { type: "number" },
   },
   ls: {
     path: { type: "string" },
+    limit: { type: "number" },
   },
 };
 
@@ -609,7 +629,318 @@ export function validateAgainstSchema(
   return issues;
 }
 
-// ─── Logging ──────────────────────────────────────────────────────────────────
+
+export type LiveToolSchema = {
+  name: string;
+  parameters: import("typebox").TSchema;
+};
+
+export type LiveRepairStatus = "unchanged" | "recovered" | "unrepairable";
+
+export interface LiveToolRepairOutcome {
+  toolName: string;
+  status: LiveRepairStatus;
+  input: unknown;
+  repaired?: unknown;
+  rulesFired: string[];
+  hints: string[];
+}
+
+export interface AssistantToolCallRepairResult {
+  changed: boolean;
+  message: MinimalAssistantMessage;
+  repairs: LiveToolRepairOutcome[];
+}
+
+const schemaRecord = (schema: unknown): Record<string, unknown> | undefined =>
+  isObject(schema) ? schema : undefined;
+
+const schemaProperties = (schema: unknown): Record<string, Record<string, unknown>> => {
+  const properties = schemaRecord(schema)?.properties;
+  if (!isObject(properties)) return {};
+  return Object.fromEntries(
+    Object.entries(properties)
+      .filter((entry): entry is [string, Record<string, unknown>] => isObject(entry[1])),
+  );
+};
+
+const schemaRequired = (schema: unknown): Set<string> => {
+  const required = schemaRecord(schema)?.required;
+  return new Set(Array.isArray(required) ? required.filter((key): key is string => typeof key === "string") : []);
+};
+
+const schemaCheck = (schema: import("typebox").TSchema, input: unknown): boolean | undefined => {
+  try {
+    return Value.Check(schema, input);
+  } catch {
+    return undefined;
+  }
+};
+
+const addRule = (
+  rulesFired: string[],
+  hints: string[],
+  ruleName: string,
+  hint: string,
+): void => {
+  if (!rulesFired.includes(ruleName)) rulesFired.push(ruleName);
+  hints.push(hint);
+};
+
+const firstUsableField = (
+  input: Record<string, unknown>,
+  names: string[],
+): { key: string; value: unknown } | undefined => {
+  for (const key of names) {
+    if (!Object.hasOwn(input, key)) continue;
+    const value = input[key];
+    if (value === null || value === undefined || value === "") continue;
+    return { key, value };
+  }
+  return undefined;
+};
+
+const deleteFields = (input: Record<string, unknown>, names: string[]): void => {
+  for (const name of names) delete input[name];
+};
+
+const repairObjectFromSchema = (
+  toolName: string,
+  schema: Record<string, unknown>,
+  input: Record<string, unknown>,
+  rulesFired: string[],
+  hints: string[],
+  path: string[] = [],
+): void => {
+  const properties = schemaProperties(schema);
+  const required = schemaRequired(schema);
+  const aliases = DEFAULT_CONFIG.fieldAliases[toolName] ?? {};
+
+  for (const [canonical, aliasNames] of Object.entries(aliases)) {
+    if (!Object.hasOwn(properties, canonical) || Object.hasOwn(input, canonical)) continue;
+    const alias = firstUsableField(input, aliasNames.filter((name) => name !== canonical));
+    if (!alias) continue;
+    input[canonical] = alias.value;
+    delete input[alias.key];
+    addRule(
+      rulesFired,
+      hints,
+      "renameAliasedField",
+      `Renamed \`${[...path, alias.key].join(".")}\` to \`${[...path, canonical].join(".")}\` for tool "${toolName}".`,
+    );
+  }
+
+  if (toolName === "edit" && path.length === 0 && Object.hasOwn(properties, "edits") && !Object.hasOwn(input, "edits")) {
+    const oldNames = ["oldText", ...(aliases.oldText ?? []).filter((name) => name !== "oldText")];
+    const newNames = ["newText", ...(aliases.newText ?? []).filter((name) => name !== "newText")];
+    const oldField = firstUsableField(input, oldNames);
+    const newField = firstUsableField(input, newNames);
+    if (typeof oldField?.value === "string" && typeof newField?.value === "string") {
+      deleteFields(input, oldNames);
+      deleteFields(input, newNames);
+      input.edits = [{ oldText: oldField.value, newText: newField.value }];
+      addRule(
+        rulesFired,
+        hints,
+        "wrapLegacyEditFields",
+        "Moved legacy edit text fields into the current `edits` array.",
+      );
+    }
+  }
+
+  if (
+    toolName === "bash" &&
+    path.length === 0 &&
+    !Object.hasOwn(input, "timeout") &&
+    Object.hasOwn(input, "timeoutMs")
+  ) {
+    const timeoutMs = input.timeoutMs;
+    if (timeoutMs !== null && timeoutMs !== undefined && Number.isFinite(Number(timeoutMs))) {
+      input.timeout = Number(timeoutMs) / 1000;
+      delete input.timeoutMs;
+      addRule(
+        rulesFired,
+        hints,
+        "convertTimeoutMilliseconds",
+        "Converted `bash.timeoutMs` from milliseconds to `timeout` seconds.",
+      );
+    }
+  }
+
+  if (
+    toolName === "fabric_exec" &&
+    path.length === 0 &&
+    schemaRecord(properties.code)?.type === "string" &&
+    Array.isArray(input.code) &&
+    input.code.every((line) => typeof line === "string")
+  ) {
+    input.code = input.code.join("\n");
+    addRule(
+      rulesFired,
+      hints,
+      "joinStringArray",
+      "Joined the `fabric_exec.code` string array with newlines.",
+    );
+  }
+
+  for (const [key, propertySchema] of Object.entries(properties)) {
+    if (!Object.hasOwn(input, key)) continue;
+    const value = input[key];
+    const fieldPath = [...path, key].join(".");
+
+    if ((value === null || value === undefined) && !required.has(key)) {
+      delete input[key];
+      addRule(
+        rulesFired,
+        hints,
+        "dropNullOrUndefined",
+        `Dropped optional ${value === null ? "null" : "undefined"} \`${fieldPath}\` from tool "${toolName}".`,
+      );
+      continue;
+    }
+
+    if (
+      propertySchema.type === "number" &&
+      typeof value === "string" &&
+      value.trim() !== "" &&
+      Number.isFinite(Number(value))
+    ) {
+      input[key] = Number(value);
+      addRule(
+        rulesFired,
+        hints,
+        "coerceNumericString",
+        `Converted numeric string in ${fieldPath} for tool "${toolName}".`,
+      );
+      continue;
+    }
+
+    if (propertySchema.type === "array") {
+      if (isObject(value) && Object.keys(value).length === 0) {
+        delete input[key];
+        addRule(
+          rulesFired,
+          hints,
+          "dropEmptyObjectPlaceholder",
+          `Dropped empty object placeholder from array field \`${fieldPath}\` for tool "${toolName}".`,
+        );
+        continue;
+      }
+      if (typeof value === "string") {
+        const parsed = tryParseJsonArray(value);
+        input[key] = parsed ?? [value];
+        addRule(
+          rulesFired,
+          hints,
+          parsed ? "parseJsonStringifiedArray" : "wrapBareStringAsArray",
+          parsed
+            ? `Parsed JSON-stringified array in \`${fieldPath}\` for tool "${toolName}".`
+            : `Wrapped bare string in an array for \`${fieldPath}\` in tool "${toolName}".`,
+        );
+      }
+      const arrayValue = input[key];
+      const itemSchema = schemaRecord(propertySchema.items);
+      if (Array.isArray(arrayValue) && itemSchema) {
+        for (let index = 0; index < arrayValue.length; index++) {
+          const item = arrayValue[index];
+          if (isObject(item)) {
+            repairObjectFromSchema(
+              toolName,
+              itemSchema,
+              item,
+              rulesFired,
+              hints,
+              [...path, key, String(index)],
+            );
+          }
+        }
+      }
+      continue;
+    }
+
+    if (propertySchema.type === "object" && isObject(value)) {
+      repairObjectFromSchema(toolName, propertySchema, value, rulesFired, hints, [...path, key]);
+    }
+  }
+};
+
+export function repairInputAgainstLiveSchema(
+  toolName: string,
+  rawInput: unknown,
+  schema: import("typebox").TSchema,
+): LiveToolRepairOutcome {
+  const initial = schemaCheck(schema, rawInput);
+  if (initial === undefined) {
+    return { toolName, status: "unchanged", input: rawInput, rulesFired: [], hints: [] };
+  }
+
+  const wrapped = initial ? undefined : wrapRootStringAsObject(rawInput, toolName);
+  const candidate = wrapped ? wrapped.wrapped : deepClone(rawInput);
+  const rulesFired = wrapped ? ["wrapRootStringAsObject"] : [];
+  const hints = wrapped ? [wrapped.hint] : [];
+
+  const objectSchema = schemaRecord(schema);
+  if (isObject(candidate) && objectSchema) {
+    repairObjectFromSchema(toolName, objectSchema, candidate, rulesFired, hints);
+  }
+
+  if (rulesFired.length === 0) {
+    return {
+      toolName,
+      status: initial ? "unchanged" : "unrepairable",
+      input: rawInput,
+      rulesFired,
+      hints,
+    };
+  }
+
+  return schemaCheck(schema, candidate) === true
+    ? {
+        toolName,
+        status: "recovered",
+        input: rawInput,
+        repaired: candidate,
+        rulesFired,
+        hints,
+      }
+    : {
+        toolName,
+        status: "unrepairable",
+        input: rawInput,
+        repaired: candidate,
+        rulesFired,
+        hints,
+      };
+}
+
+export function repairAssistantToolCallInputs(
+  message: MinimalAssistantMessage,
+  tools: readonly LiveToolSchema[],
+): AssistantToolCallRepairResult {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return { changed: false, message, repairs: [] };
+  }
+
+  const schemas = new Map(tools.map((tool) => [tool.name, tool.parameters]));
+  const repairs: LiveToolRepairOutcome[] = [];
+  let changed = false;
+  const content = message.content.map((part) => {
+    if (!isObject(part) || part.type !== "toolCall" || typeof part.name !== "string") return part;
+    const schema = schemas.get(part.name);
+    if (!schema) return part;
+    const outcome = repairInputAgainstLiveSchema(part.name, part.arguments, schema);
+    if (outcome.status !== "unchanged") repairs.push(outcome);
+    if (outcome.status !== "recovered") return part;
+    changed = true;
+    return { ...part, arguments: outcome.repaired };
+  });
+
+  return changed
+    ? { changed: true, message: { ...message, content }, repairs }
+    : { changed: false, message, repairs };
+}
+
+// Logging
 
 export * from "./grammar-repair.js";
 
