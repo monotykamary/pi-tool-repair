@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeGrammarRepairConfig,
   parseToolGrammarLeaks,
   repairAssistantMessageGrammarLeaks,
+  resolveGrammarRepairForModel,
   type GrammarRepairConfig,
   type MinimalAssistantMessage,
 } from "../src/index.js";
@@ -373,5 +375,85 @@ describe("assistant message grammar repair", () => {
     expect(result.recoveredCalls).toHaveLength(1);
     expect(result.recoveredCalls[0]).toEqual({ grammar: "dsml", name: "bash", arguments: { command: "pwd" } });
     expect((result.message.content[0] as { text: string }).text).toBe("prefix");
+  });
+});
+
+describe("per-model grammar repair enablement", () => {
+  const baseConfig: GrammarRepairConfig = {
+    enabled: false,
+    grammars: ["qwen"],
+    mode: "recover",
+    requireKnownTool: true,
+    debug: false,
+    leakModels: ["qwen3", "^@cf/.+kimi"],
+  };
+
+  const leakedMessage = (): MinimalAssistantMessage => ({
+    role: "assistant",
+    content: [{
+      type: "text",
+      text: `<tool_call>
+{"name": "bash", "arguments": {"command": "pwd"}}
+</tool_call>`,
+    }],
+    stopReason: "stop",
+    timestamp: 1,
+  });
+
+  it("keeps grammar repair off when no leakModels are configured", () => {
+    const { leakModels: _omitted, ...config } = baseConfig;
+    expect(resolveGrammarRepairForModel(config, { id: "local/qwen3-coder" }).enabled).toBe(false);
+  });
+
+  it("enables recovery when the model id matches a leakModels pattern", () => {
+    const resolved = resolveGrammarRepairForModel(baseConfig, { id: "local/qwen3-coder" });
+    expect(resolved.enabled).toBe(true);
+  });
+
+  it("matches patterns case-insensitively", () => {
+    expect(resolveGrammarRepairForModel(baseConfig, { id: "LOCAL/QWEN3-CODER" }).enabled).toBe(true);
+  });
+
+  it("leaves recovery off for models that match no pattern", () => {
+    expect(resolveGrammarRepairForModel(baseConfig, { id: "claude-sonnet-4" }).enabled).toBe(false);
+  });
+
+  it("leaves recovery off when there is no model id", () => {
+    expect(resolveGrammarRepairForModel(baseConfig, undefined).enabled).toBe(false);
+    expect(resolveGrammarRepairForModel(baseConfig, {}).enabled).toBe(false);
+  });
+
+  it("returns the config unchanged when repair is already globally enabled", () => {
+    const globalConfig = { ...baseConfig, enabled: true };
+    expect(resolveGrammarRepairForModel(globalConfig, { id: "claude-sonnet-4" })).toBe(globalConfig);
+  });
+
+  it("normalization keeps compilable regex strings and drops invalid ones", () => {
+    const normalized = normalizeGrammarRepairConfig({
+      leakModels: ["qwen3", "[", 1, null] as unknown as string[],
+    });
+    expect(normalized.leakModels).toEqual(["qwen3"]);
+    expect(normalizeGrammarRepairConfig({}).leakModels).toBeUndefined();
+  });
+
+  it("writes the recovered tool call back onto a matched bleeding message", () => {
+    const resolved = resolveGrammarRepairForModel(baseConfig, { id: "local/qwen3-coder" });
+    const result = repairAssistantMessageGrammarLeaks(leakedMessage(), resolved, new Set(["bash"]));
+    expect(result.changed).toBe(true);
+    expect(result.recoveredCalls).toEqual([
+      { grammar: "qwen", name: "bash", arguments: { command: "pwd" } },
+    ]);
+    expect(result.message.stopReason).toBe("toolUse");
+    expect(result.message.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", name: "bash", arguments: { command: "pwd" } }),
+    );
+    expect((result.message.content[0] as { text: string }).text.trim()).toBe("");
+  });
+
+  it("leaves bleeding text intact for a non-matching model", () => {
+    const resolved = resolveGrammarRepairForModel(baseConfig, { id: "claude-sonnet-4" });
+    const result = repairAssistantMessageGrammarLeaks(leakedMessage(), resolved, new Set(["bash"]));
+    expect(result.changed).toBe(false);
+    expect(result.recoveredCalls).toHaveLength(0);
   });
 });

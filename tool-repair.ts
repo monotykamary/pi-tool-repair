@@ -17,6 +17,7 @@ import {
   logRepair,
   loadGrammarRepairConfig,
   repairAssistantMessageGrammarLeaks,
+  resolveGrammarRepairForModel,
   repairAssistantToolCallInputs,
   normalizePhantomToolUse,
   type MinimalAssistantMessage,
@@ -117,25 +118,26 @@ export default function (pi: ExtensionAPI) {
       if (model && hasAnchorBleedBug(model) && stripAnchorBleedInPlace(args)) changed = true;
     }
 
-    if (grammarRepairConfig.enabled) {
+    const effectiveGrammarRepairConfig = resolveGrammarRepairForModel(grammarRepairConfig, model);
+    if (effectiveGrammarRepairConfig.enabled) {
       const knownTools = new Set(
         safeGetActiveTools(pi)
           .filter((name): name is string => typeof name === "string" && name.length > 0),
       );
       const grammarResult = repairAssistantMessageGrammarLeaks(
         message,
-        grammarRepairConfig,
+        effectiveGrammarRepairConfig,
         knownTools,
       );
       if (grammarResult.changed) {
         message = grammarResult.message;
         changed = true;
-        if (grammarRepairConfig.debug) {
+        if (effectiveGrammarRepairConfig.debug) {
           const calls = grammarResult.recoveredCalls
             .map((call) => `${call.grammar}:${call.name}`)
             .join(",") || "none";
           process.stderr.write(
-            `[pi-tool-repair] grammar-repair mode=${grammarRepairConfig.mode} ` +
+            `[pi-tool-repair] grammar-repair mode=${effectiveGrammarRepairConfig.mode} ` +
             `stripped=${grammarResult.strippedRanges} recovered=${calls}\n`,
           );
         }

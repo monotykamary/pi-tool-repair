@@ -143,6 +143,24 @@ Modes:
 | `recover` | Strip leaked markup and append recovered pi `toolCall` blocks. |
 | `strip`   | Strip leaked markup only; do not execute recovered calls.      |
 
+#### Per-model enablement
+
+If only some of your models leak grammar — common with local servers such as llama.cpp, vLLM, or Ollama — auto-enable recovery per model id with `leakModels`. Entries are case-insensitive regex fragments matched against the active model id:
+
+```json
+{
+  "grammarRepair": {
+    "leakModels": ["kimi", "qwen3", "gguf"]
+  }
+}
+```
+
+Recovery turns on whenever the session's model id matches a pattern. Global `enabled: true` takes precedence over `leakModels`, so models with reliable native tool calling stay untouched. Regex entries that fail to compile are ignored.
+
+#### What the model sees on the next request
+
+Every repair runs on pi's `message_end` hook, where the repaired message is replaced in place — the corrected call, not the model's original output, is what pi writes to the session file and resends on later requests. With `mode: "recover"`, leaked tool-call text is likewise converted into real `toolCall` blocks before persistence, so subsequent requests show the model a properly formed call plus its tool results: an in-context correction loop instead of a silent execute-time patch. Local models benefit the most since there is no prompt-cache penalty for the rewritten history; providers that cache by prefix may treat the first turn after a repair as a cache miss.
+
 Safety gates:
 
 - `requireKnownTool: true` only recovers calls whose name is in pi's active tool registry.
