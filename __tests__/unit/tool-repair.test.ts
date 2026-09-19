@@ -332,11 +332,11 @@ describe("stripGrammarTokenLeaksInPlace", () => {
     expect(obj.include).toEqual(["a", "b"]);
   });
 
-  it("leaves normal keys and values unchanged", () => {
-    const obj: Record<string, unknown> = { command: "pwd" };
+  it("leaves normal keys and whitespace-sensitive values unchanged", () => {
+    const obj: Record<string, unknown> = { command: "pwd", code: "return\n  1;", content: "  padded  " };
     const changed = stripGrammarTokenLeaksInPlace(obj);
     expect(changed).toBe(false);
-    expect(obj).toEqual({ command: "pwd" });
+    expect(obj).toEqual({ command: "pwd", code: "return\n  1;", content: "  padded  " });
   });
 
   it("returns true when a key is repaired", () => {
@@ -466,13 +466,11 @@ describe("validateAgainstSchema", () => {
     expect(issues[0].expected).toBe("number");
   });
 
-  it("flags string where array expected", () => {
+  it("flags a string where the current edit array is expected", () => {
     const issues = validateAgainstSchema(
-      { pattern: "foo", include: "bar" },
-      BUILTIN_SCHEMAS.grep,
+      { path: "/x", edits: "not-an-array" },
+      BUILTIN_SCHEMAS.edit,
     );
-    // The validator emits both a type-check issue (actualType !== expected)
-    // and a dedicated array-vs-string-coercion issue.
     expect(issues.length).toBeGreaterThanOrEqual(1);
     expect(issues.some((i) => i.code === "invalid_type" && i.expected === "array")).toBe(true);
   });

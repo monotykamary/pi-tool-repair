@@ -24,6 +24,9 @@ export interface GrammarRepairConfig {
   mode: GrammarRepairMode;
   requireKnownTool: boolean;
   debug: boolean;
+  // Case-insensitive regex fragments that auto-enable grammar repair when the
+  // active model id matches one of them. Ignored while `enabled` is true.
+  leakModels?: string[];
 }
 
 export interface ExtensionFileConfig {
@@ -120,13 +123,71 @@ export function normalizeGrammarRepairConfig(raw: Partial<GrammarRepairConfig> =
     ? raw.grammars.filter((name): name is GrammarName => grammarSet.has(name as GrammarName))
     : ALL_GRAMMARS;
 
+  const leakModels = normalizeLeakModels(raw.leakModels);
+
   return {
     enabled: raw.enabled ?? DEFAULT_GRAMMAR_REPAIR_CONFIG.enabled,
     grammars: grammars.length > 0 ? grammars : ALL_GRAMMARS,
     mode: raw.mode === "strip" ? "strip" : "recover",
     requireKnownTool: raw.requireKnownTool ?? DEFAULT_GRAMMAR_REPAIR_CONFIG.requireKnownTool,
     debug: raw.debug ?? DEFAULT_GRAMMAR_REPAIR_CONFIG.debug,
+    ...(leakModels ? { leakModels } : {}),
   };
+}
+
+const compileLeakModelPattern = (pattern: string): RegExp | undefined => {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    return undefined;
+  }
+};
+
+function normalizeLeakModels(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const valid = raw.filter(
+    (pattern): pattern is string =>
+      typeof pattern === "string" && compileLeakModelPattern(pattern) !== undefined,
+  );
+  return valid.length > 0 ? valid : undefined;
+}
+
+// Enables grammar repair for the current message when the active model id
+// matches a configured leakModels pattern. Global `enabled: true` always wins,
+// so models with native tool calling keep the recovery path off unless listed.
+export function resolveGrammarRepairForModel(
+  config: GrammarRepairConfig,
+  model: { id?: string } | null | undefined,
+): GrammarRepairConfig {
+  if (config.enabled) return config;
+  const patterns = config.leakModels;
+  if (!patterns || patterns.length === 0) return config;
+  const modelId = model?.id;
+  if (typeof modelId !== "string" || modelId.length === 0) return config;
+  return patterns.some((pattern) => compileLeakModelPattern(pattern)?.test(modelId))
+    ? { ...config, enabled: true }
+    : config;
+}
+
+// Open models occasionally append index tokens to tool names (for example
+// `bash_1_234456789` for `bash`). Recover the original name only when the
+// trailing part is made up of separators and digits, and prefer the longest
+// known tool so `read_file_1_2` never collapses to `read`. Names that are
+// already known, or whose suffix contains real characters
+// (`read_multiple_files`), are returned untouched.
+const MANGLED_TOOL_SUFFIX = /^[_-\d]+$/;
+
+function recoverMangledToolName(name: string, knownTools: Set<string>): string {
+  if (knownTools.has(name)) return name;
+
+  let best: string | undefined;
+  for (const tool of knownTools) {
+    if (tool.length >= name.length || !name.startsWith(tool)) continue;
+    if (!MANGLED_TOOL_SUFFIX.test(name.slice(tool.length))) continue;
+    if (best === undefined || tool.length > best.length) best = tool;
+  }
+
+  return best ?? name;
 }
 
 export function repairAssistantMessageGrammarLeaks(
@@ -149,6 +210,10 @@ export function repairAssistantMessageGrammarLeaks(
     if (text === undefined) return part;
 
     const candidates = selectCandidates(parseToolGrammarCandidates(text, enabled))
+      .map((candidate) => {
+        const name = recoverMangledToolName(candidate.name, knownTools);
+        return name === candidate.name ? candidate : { ...candidate, name };
+      })
       .filter((candidate) => candidate.stripOnly || isAllowedTool(candidate.name, config, knownTools));
 
     if (candidates.length === 0) return part;

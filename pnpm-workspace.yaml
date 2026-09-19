@@ -1,3 +1,10 @@
 allowBuilds:
   '@google/genai': false
   protobufjs: false
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
+  - '@earendil-works/pi-ai@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
+  - '@earendil-works/pi-coding-agent@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
+  - '@earendil-works/pi-telemetry@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
+  - '@earendil-works/pi-tui@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
+  - '@earendil-works/chord@0.85.1'
