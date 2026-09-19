@@ -457,3 +457,64 @@ describe("per-model grammar repair enablement", () => {
     expect(result.recoveredCalls).toHaveLength(0);
   });
 });
+
+describe("mangled tool-name recovery", () => {
+  const leakedInvoke = (toolName: string): MinimalAssistantMessage => ({
+    role: "assistant",
+    content: [{
+      type: "text",
+      text: `<｜DSML｜tool_calls>
+<｜DSML｜invoke name="${toolName}">
+<｜DSML｜parameter name="command" string="true">pwd</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>`,
+    }],
+    stopReason: "stop",
+    timestamp: 1,
+  });
+
+  it("recovers the original name from an index-suffixed tool name", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      leakedInvoke("bash_1_234456789"),
+      enabledConfig,
+      new Set(["bash"]),
+    );
+    expect(result.recoveredCalls).toEqual([
+      { grammar: "dsml", name: "bash", arguments: { command: "pwd" } },
+    ]);
+  });
+
+  it("prefers the longest known tool prefix", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      leakedInvoke("read_file_1_2"),
+      enabledConfig,
+      new Set(["read", "read_file"]),
+    );
+    expect(result.recoveredCalls).toEqual([
+      { grammar: "dsml", name: "read_file", arguments: { command: "pwd" } },
+    ]);
+  });
+
+  it("leaves names with non-numeric suffixes untouched", () => {
+    const permissive: GrammarRepairConfig = { ...enabledConfig, requireKnownTool: false };
+    const result = repairAssistantMessageGrammarLeaks(
+      leakedInvoke("read_multiple_files"),
+      permissive,
+      new Set(["read"]),
+    );
+    expect(result.recoveredCalls).toEqual([
+      { grammar: "dsml", name: "read_multiple_files", arguments: { command: "pwd" } },
+    ]);
+  });
+
+  it("leaves already-known names untouched", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      leakedInvoke("bash"),
+      enabledConfig,
+      new Set(["bash"]),
+    );
+    expect(result.recoveredCalls).toEqual([
+      { grammar: "dsml", name: "bash", arguments: { command: "pwd" } },
+    ]);
+  });
+});
