@@ -168,6 +168,27 @@ export function resolveGrammarRepairForModel(
     : config;
 }
 
+// Open models occasionally append index tokens to tool names (for example
+// `bash_1_234456789` for `bash`). Recover the original name only when the
+// trailing part is made up of separators and digits, and prefer the longest
+// known tool so `read_file_1_2` never collapses to `read`. Names that are
+// already known, or whose suffix contains real characters
+// (`read_multiple_files`), are returned untouched.
+const MANGLED_TOOL_SUFFIX = /^[_-\d]+$/;
+
+function recoverMangledToolName(name: string, knownTools: Set<string>): string {
+  if (knownTools.has(name)) return name;
+
+  let best: string | undefined;
+  for (const tool of knownTools) {
+    if (tool.length >= name.length || !name.startsWith(tool)) continue;
+    if (!MANGLED_TOOL_SUFFIX.test(name.slice(tool.length))) continue;
+    if (best === undefined || tool.length > best.length) best = tool;
+  }
+
+  return best ?? name;
+}
+
 export function repairAssistantMessageGrammarLeaks(
   message: MinimalAssistantMessage,
   config: GrammarRepairConfig,
@@ -188,6 +209,10 @@ export function repairAssistantMessageGrammarLeaks(
     if (text === undefined) return part;
 
     const candidates = selectCandidates(parseToolGrammarCandidates(text, enabled))
+      .map((candidate) => {
+        const name = recoverMangledToolName(candidate.name, knownTools);
+        return name === candidate.name ? candidate : { ...candidate, name };
+      })
       .filter((candidate) => candidate.stripOnly || isAllowedTool(candidate.name, config, knownTools));
 
     if (candidates.length === 0) return part;
