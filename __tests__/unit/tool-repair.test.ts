@@ -117,7 +117,9 @@ describe("stripAnchorBleedInPlace", () => {
 });
 
 describe("hasAnchorBleedBug", () => {
-  it("detects kimi-k2 models", () => {
+  it("detects @cf kimi model ids", () => {
+    expect(hasAnchorBleedBug({ id: "@cf/moonshotai/kimi-k2.6" })).toBe(true);
+    expect(hasAnchorBleedBug({ id: "@cf/other/kimi-preview" })).toBe(true);
     expect(hasAnchorBleedBug({ id: "kimi-k2-instruct" })).toBe(true);
   });
 
