@@ -17,6 +17,14 @@ _Fixes the finite set of tool-call mistakes open models make — before tools ex
 >
 > By adding a thin repair layer, DeepSeek V4 Pro beat Opus 4.7 in 6/10 internal evals — without changing the model. The same four mistakes repeat across DeepSeek, GLM, Qwen, and others. Each fix is 30–100 lines. Order matters.
 
+## Pi 0.99 compatibility (0.3.4)
+
+Tested with Pi **0.99.0**. Host-provided Pi packages and TypeBox are peers (`*`), not bundled runtime dependencies; development uses exact Pi 0.99.0 pins and host-compatible TypeBox where needed.
+
+Repair still runs at `message_end`, before model-issued argument validation. Native `ctx.executeTool` calls validate independently before `tool_call`; malformed nested arguments are rejected rather than bypassing validation. Fabric-owned guest normalization remains Fabric's responsibility.
+
+Run `bun run test:host` for the offline real-host load, native codemode/nested-call, module-identity and reload checks. Set `PI99_HOST_PACKAGE` to an installed Pi package directory to test that host explicitly; add `PI99_HOST_ENTRY=bundle` to check the bundled CLI runtime's constructors.
+
 ## What it fixes
 
 | Problem | Model sends | After repair |
