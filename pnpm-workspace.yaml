@@ -2,15 +2,15 @@ allowBuilds:
   '@google/genai': false
   protobufjs: false
 minimumReleaseAgeExclude:
-  # Explicitly reviewed Pi 0.99 migration; retain the age policy for all other releases.
-  - '@earendil-works/chord@0.99.0'
-  - '@earendil-works/pi-agent-core@0.99.0'
-  - '@earendil-works/pi-ai@0.99.0'
-  - '@earendil-works/pi-codemode@0.99.0'
-  - '@earendil-works/pi-coding-agent@0.99.0'
-  - '@earendil-works/pi-mcp@0.99.0'
-  - '@earendil-works/pi-telemetry@0.99.0'
-  - '@earendil-works/pi-tui@0.99.0'
+  # Explicitly reviewed Pi 1.0 migration; retain the age policy for all other releases.
+  - '@earendil-works/chord@1.0.0'
+  - '@earendil-works/pi-agent-core@1.0.0'
+  - '@earendil-works/pi-ai@1.0.0'
+  - '@earendil-works/pi-codemode@1.0.0'
+  - '@earendil-works/pi-coding-agent@1.0.0'
+  - '@earendil-works/pi-mcp@1.0.0'
+  - '@earendil-works/pi-telemetry@1.0.0'
+  - '@earendil-works/pi-tui@1.0.0'
   - '@earendil-works/pi-agent-core@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
   - '@earendil-works/pi-ai@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
   - '@earendil-works/pi-coding-agent@0.84.0 || 0.84.1 || 0.84.2 || 0.84.3 || 0.84.4 || 0.85.1'
