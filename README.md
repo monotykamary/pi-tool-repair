@@ -138,7 +138,8 @@ Raw XML/sentinel tool-call grammar recovery is opt-in because it can turn assist
       "glm",
       "granite",
       "minimax-text",
-      "olmo"
+      "olmo",
+      "atem"
     ]
   }
 }
@@ -176,7 +177,7 @@ Safety gates:
 - Incomplete or unparseable blocks are not recovered as tool calls. For DSML, dangling or truncated marker tokens (e.g. a stream that died at `<｜DSML｜tool_calls` with no closing `>`) are still stripped from visible text so the raw marker doesn't persist in the transcript.
 - If the provider already emitted native `toolCall` blocks, leaked shadow text is stripped but duplicate calls are not added.
 
-Covered grammar families: DeepSeek DSML, MiniMax/Anthropic `<invoke>`, Qwen/Hermes `<tool_call>`, Kimi sentinels, Mistral `[TOOL_CALLS]`, Llama `<|python_tag|>`, GLM `arg_key`/`arg_value`, Granite JSON `<tool_call>`, MiniMax-Text-01 TypeScript calls, and OLMo3 `<function_calls>` pythonic calls. See [`docs/tool-call-grammar-leakage-survey.md`](./docs/tool-call-grammar-leakage-survey.md) for the survey.
+Covered grammar families: DeepSeek DSML, MiniMax/Anthropic `<invoke>`, Qwen/Hermes `<tool_call>`, Kimi sentinels, Mistral `[TOOL_CALLS]`, Llama `<|python_tag|>`, GLM `arg_key`/`arg_value`, Granite JSON `<tool_call>`, MiniMax-Text-01 TypeScript calls, OLMo3 `<function_calls>` pythonic calls, and the `atem` harness grammar (`<atem:function_calls>`/`<atem:invoke>`, leaked e.g. by Muse Spark models served through tool gateways). See [`docs/tool-call-grammar-leakage-survey.md`](./docs/tool-call-grammar-leakage-survey.md) for the survey.
 
 ### Debug logging
 

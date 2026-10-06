@@ -219,6 +219,27 @@ AllenAI OLMo 3 Instruct: newline-delimited pythonic calls wrapped in
 (OLMo 3 *Think* models are not trained for tools — leakage there is the model
 narrating, not a grammar.)
 
+### K. `atem` harness XML
+
+Muse Spark models served through tool gateways that present an OpenAI-style
+schema (observed: `muse-spark-1.3-contributor` via OpenCode Zen,
+`openai-responses` API). The model falls back to its native harness grammar as
+plain assistant text (`stopReason: stop`, so the provider itself saw no call):
+
+```xml
+<atem:function_calls>
+<atem:invoke name="default.bash">
+<atem:parameter name="command">glab ci list</atem:parameter>
+<atem:parameter name="timeout">60</atem:parameter>
+</atem:invoke>
+</atem:function_calls>
+```
+
+Notes for repair: tool names carry the harness namespace (`default.bash` →
+`bash`); some names have no pi counterpart (`default.todo`) and must be
+dropped, not executed. Leakage triggers especially when the model reaches for
+a tool outside pi's schema.
+
 ## Quick reference table
 
 | Family | Models | Marker shape | Inner body | Leaks into |
@@ -233,6 +254,7 @@ narrating, not a grammar.)
 | H. Granite | Granite 4.0/4.1 (+ Nano) | `<tool_call>` | JSON (sometimes escaped string) | content |
 | I. MiniMax-Text-01 | MiniMax-Text-01 | `<function_call>` ```typescript | `functions.x({...})` | content |
 | J. OLMo3 | OLMo 3 Instruct | `<function_calls>` | newline pythonic | content |
+| K. atem | Muse Spark (via OpenCode Zen) | `<atem:function_calls>` | XML kv | content |
 
 ## Provider hot-spots (where leakage is reported in the wild)
 
@@ -246,6 +268,8 @@ parser, producing the leakage the colleague observed:
 - **Microsoft Foundry / CherryIN** — DeepSeek V4 DSML.
 - Self-hosted **vLLM / SGLang / MLX / llama.cpp / Ollama** across all families
   (parser version mismatches, batched-decode special-token stripping).
+- **OpenCode Zen** — serves Muse Spark models that leak the `atem` harness
+  grammar as plain assistant text.
 
 ## Design implications for the opt-in flag
 

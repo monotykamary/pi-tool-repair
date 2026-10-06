@@ -13,6 +13,7 @@ export const GRAMMAR_NAMES = [
   "granite",
   "minimax-text",
   "olmo",
+  "atem",
 ] as const;
 
 export type GrammarName = typeof GRAMMAR_NAMES[number];
@@ -318,6 +319,10 @@ function parseToolGrammarCandidates(text: string, enabled: Set<GrammarName>): Ca
     candidates.push(...parseBareJsonToolCalls(text, "llama"));
   }
   if (enabled.has("olmo")) candidates.push(...parseOlmo(text));
+  if (enabled.has("atem")) {
+    candidates.push(...parseAtem(text));
+    candidates.push(...parseAtemDanglingMarkers(text));
+  }
   return candidates.filter((candidate) => candidate.range.end > candidate.range.start);
 }
 
@@ -933,6 +938,66 @@ function parseOlmo(text: string): Candidate[] {
       candidates.push({ ...call, grammar: "olmo", range: { start: match.index, end: match.index + match[0].length } });
     }
   }
+  return candidates;
+}
+
+function parseAtem(text: string): Candidate[] {
+  const candidates: Candidate[] = [];
+  const wrapperRe = /<atem:function_calls>([\s\S]*?)<\/atem:function_calls>/gi;
+
+  for (const match of text.matchAll(wrapperRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+    const range = { start: match.index, end: match.index + match[0].length };
+    for (const call of parseAtemInvokes(match[1] ?? "")) {
+      candidates.push({ ...call, grammar: "atem", range });
+    }
+  }
+
+  return candidates;
+}
+
+function parseAtemInvokes(body: string): Array<Omit<Candidate, "range" | "grammar">> {
+  const calls: Array<Omit<Candidate, "range" | "grammar">> = [];
+  const invokeRe = /<atem:invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/atem:invoke>/gi;
+
+  for (const match of body.matchAll(invokeRe)) {
+    const rawName = match[1]?.trim();
+    if (!rawName) continue;
+    // Strip the harness namespace (`default.bash` -> `bash`) so the name can
+    // match pi's tool registry. Unknown tools are still dropped downstream
+    // via `requireKnownTool`.
+    const name = rawName.replace(/^default[.:]/, "");
+    if (!name) continue;
+    calls.push({ name, arguments: parseAtemArguments(match[2] ?? "") });
+  }
+
+  return calls;
+}
+
+function parseAtemArguments(body: string): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  const paramRe = /<atem:parameter\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/atem:parameter>/gi;
+
+  for (const match of body.matchAll(paramRe)) {
+    const key = match[1]?.trim();
+    if (!key) continue;
+    args[key] = maybeParseJsonValue((match[2] ?? "").trim());
+  }
+
+  return args;
+}
+
+function parseAtemDanglingMarkers(text: string): Candidate[] {
+  const candidates: Candidate[] = [];
+  const markerRe = /<\/?atem:(?:function_calls|invoke|parameter)(?:\s+[^>\n]*)?>?/gi;
+
+  for (const match of text.matchAll(markerRe)) {
+    if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
+    const range = { start: match.index, end: match.index + match[0].length };
+    if (candidates.some((candidate) => rangesOverlap(candidate.range, range))) continue;
+    candidates.push({ name: "", arguments: {}, grammar: "atem", range, stripOnly: true });
+  }
+
   return candidates;
 }
 
