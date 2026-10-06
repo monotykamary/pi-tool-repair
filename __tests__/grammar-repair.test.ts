@@ -21,6 +21,7 @@ const enabledConfig: GrammarRepairConfig = {
     "granite",
     "minimax-text",
     "olmo",
+    "atem",
   ],
   mode: "recover",
   requireKnownTool: true,
@@ -275,6 +276,46 @@ write_file(path="/tmp/a", content="hello", overwrite=True)
     ]);
   });
 
+  it("parses atem function_calls and strips the default namespace", () => {
+    const text = `<atem:function_calls>
+<atem:invoke name="default.bash">
+<atem:parameter name="command">glab ci list --per-page 6 2>&1 | head -n 12</atem:parameter>
+<atem:parameter name="timeout">60</atem:parameter>
+</atem:invoke>
+</atem:function_calls>`;
+
+    const calls = parseToolGrammarLeaks(text, ["atem"]);
+    expect(calls).toEqual([
+      {
+        grammar: "atem",
+        name: "bash",
+        arguments: { command: "glab ci list --per-page 6 2>&1 | head -n 12", timeout: 60 },
+      },
+    ]);
+  });
+
+  it("parses multiple atem invokes from one wrapper", () => {
+    const text = `<atem:function_calls>
+<atem:invoke name="default.read">
+<atem:parameter name="path">/tmp/a</atem:parameter>
+</atem:invoke>
+<atem:invoke name="bash">
+<atem:parameter name="command">pwd</atem:parameter>
+</atem:invoke>
+</atem:function_calls>`;
+
+    const calls = parseToolGrammarLeaks(text, ["atem"]);
+    expect(calls).toEqual([
+      { grammar: "atem", name: "read", arguments: { path: "/tmp/a" } },
+      { grammar: "atem", name: "bash", arguments: { command: "pwd" } },
+    ]);
+  });
+
+  it("does not parse atem grammar inside markdown code fences", () => {
+    const text = "```xml\n<atem:function_calls>\n<atem:invoke name=\"bash\">\n</atem:invoke>\n</atem:function_calls>\n```";
+    expect(parseToolGrammarLeaks(text, ["atem"])).toEqual([]);
+  });
+
   it("does not parse tool grammar inside markdown code fences", () => {
     const text = "```xml\n<tool_call>{\"name\":\"bash\",\"arguments\":{}}</tool_call>\n```";
     expect(parseToolGrammarLeaks(text, ["granite"])).toEqual([]);
@@ -442,6 +483,76 @@ describe("assistant message grammar repair", () => {
     expect(result.recoveredCalls).toHaveLength(1);
     expect(result.recoveredCalls[0]).toEqual({ grammar: "dsml", name: "bash", arguments: { command: "pwd" } });
     expect((result.message.content[0] as { text: string }).text).toBe("prefix");
+  });
+
+  it("recovers a leaked atem call and flips stopReason to toolUse", () => {
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{
+        type: "text",
+        text: `I'll list the pipelines.
+<atem:function_calls>
+<atem:invoke name="default.bash">
+<atem:parameter name="command">glab ci list --per-page 6</atem:parameter>
+<atem:parameter name="timeout">60</atem:parameter>
+</atem:invoke>
+</atem:function_calls>`,
+      }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["bash"]));
+    expect(result.changed).toBe(true);
+    expect(result.message.stopReason).toBe("toolUse");
+    expect(result.message.content).toEqual([
+      { type: "text", text: "I'll list the pipelines." },
+      {
+        type: "toolCall",
+        id: expect.stringMatching(/^tool_repair_atem_/),
+        name: "bash",
+        arguments: { command: "glab ci list --per-page 6", timeout: 60 },
+      },
+    ]);
+  });
+
+  it("leaves atem calls to unknown tools untouched by default", () => {
+    // `default.todo` has no counterpart in pi's tool registry, so there is
+    // nothing safe to recover. The text stays as-is instead of becoming a
+    // broken tool call.
+    const text = `<atem:function_calls>
+<atem:invoke name="default.todo">
+<atem:parameter name="action">create</atem:parameter>
+<atem:parameter name="subject">do things</atem:parameter>
+</atem:invoke>
+</atem:function_calls>`;
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["bash"]));
+    expect(result.changed).toBe(false);
+    expect(result.recoveredCalls).toEqual([]);
+  });
+
+  it("strips dangling atem markers without recovering a call", () => {
+    const message: MinimalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "I'll check.\n<atem:function_calls>\n<atem:invoke name=\"bash\">" }],
+      stopReason: "stop",
+      timestamp: 1,
+    };
+
+    const result = repairAssistantMessageGrammarLeaks(message, enabledConfig, new Set(["bash"]));
+    expect(result.changed).toBe(true);
+    expect(result.recoveredCalls).toEqual([]);
+    expect(result.message.stopReason).toBe("stop");
+    const text = (result.message.content[0] as { text: string }).text;
+    expect(text).not.toContain("atem:");
+    expect(text).toContain("I'll check.");
   });
 });
 
