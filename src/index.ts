@@ -7,7 +7,7 @@
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-import type { MinimalAssistantMessage } from "./grammar-repair.js";
+import { recoverMangledToolName, type MinimalAssistantMessage } from "./grammar-repair.js";
 import { Value } from "typebox/value";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -915,6 +915,52 @@ export function repairInputAgainstLiveSchema(
       };
 }
 
+// A native call whose name is not an active tool fails with "tool not found".
+// When the name is an active tool plus an index suffix (`bash_1_234456789`,
+// `functions.bash:0`), rename it — but only if the arguments validate against
+// that tool's schema, directly or after the usual argument repairs. Otherwise
+// the call is left as-is so Pi reports the original error.
+function recoverMangledToolCallName(
+  name: string,
+  rawInput: unknown,
+  schemas: ReadonlyMap<string, import("typebox").TSchema>,
+  knownTools: ReadonlySet<string>,
+): LiveToolRepairOutcome | undefined {
+  const toolName = recoverMangledToolName(name, knownTools);
+  const schema = toolName === name ? undefined : schemas.get(toolName);
+  if (!schema) return undefined;
+
+  const hint = `Renamed tool "${name}" to "${toolName}"; the trailing index is not part of the tool name.`;
+  const outcome = repairInputAgainstLiveSchema(toolName, rawInput, schema);
+  const repaired = outcome.status === "recovered"
+    ? outcome.repaired
+    : outcome.status === "unchanged" && schemaCheck(schema, rawInput) === true
+      ? rawInput
+      : undefined;
+
+  if (repaired === undefined) {
+    return {
+      toolName: name,
+      status: "unrepairable",
+      input: rawInput,
+      rulesFired: ["recoverMangledToolName", ...outcome.rulesFired],
+      hints: [
+        `${hint} Not applied: the arguments do not validate against "${toolName}".`,
+        ...outcome.hints,
+      ],
+    };
+  }
+
+  return {
+    toolName,
+    status: "recovered",
+    input: rawInput,
+    repaired,
+    rulesFired: ["recoverMangledToolName", ...outcome.rulesFired],
+    hints: [hint, ...outcome.hints],
+  };
+}
+
 export function repairAssistantToolCallInputs(
   message: MinimalAssistantMessage,
   tools: readonly LiveToolSchema[],
@@ -924,12 +970,20 @@ export function repairAssistantToolCallInputs(
   }
 
   const schemas = new Map(tools.map((tool) => [tool.name, tool.parameters]));
+  const knownTools = new Set(schemas.keys());
   const repairs: LiveToolRepairOutcome[] = [];
   let changed = false;
   const content = message.content.map((part) => {
     if (!isObject(part) || part.type !== "toolCall" || typeof part.name !== "string") return part;
     const schema = schemas.get(part.name);
-    if (!schema) return part;
+    if (!schema) {
+      const renamed = recoverMangledToolCallName(part.name, part.arguments, schemas, knownTools);
+      if (!renamed) return part;
+      repairs.push(renamed);
+      if (renamed.status !== "recovered") return part;
+      changed = true;
+      return { ...part, name: renamed.toolName, arguments: renamed.repaired };
+    }
     const outcome = repairInputAgainstLiveSchema(part.name, part.arguments, schema);
     if (outcome.status !== "unchanged") repairs.push(outcome);
     if (outcome.status !== "recovered") return part;

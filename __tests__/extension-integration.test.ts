@@ -61,6 +61,31 @@ describe("extension prevalidation integration", () => {
     expect(result.message.content[0]?.arguments).toEqual({ path: "/x" });
   });
 
+  it("recovers an index-suffixed native tool name before Pi looks the tool up", () => {
+    const bashSchema = Type.Object({ command: Type.String() });
+    const { api, handlers } = createApi(["bash"], [{ name: "bash", parameters: bashSchema }]);
+    toolRepair(api);
+
+    const result = handlers.message_end?.({
+      message: {
+        role: "assistant",
+        content: [{
+          type: "toolCall",
+          id: "functions.bash_1_234456789:0",
+          name: "bash_1_234456789",
+          arguments: { command: "pwd" },
+        }],
+        stopReason: "toolUse",
+      },
+    }, { model: { id: "moonshotai/kimi-k2.6" } }) as { message: { content: Array<Record<string, unknown>> } };
+
+    expect(result.message.content[0]).toMatchObject({
+      id: "functions.bash_1_234456789:0",
+      name: "bash",
+      arguments: { command: "pwd" },
+    });
+  });
+
   it("repairs fabric_exec when it is the only active model-facing tool", () => {
     const fabricSchema = Type.Object({
       code: Type.String(),

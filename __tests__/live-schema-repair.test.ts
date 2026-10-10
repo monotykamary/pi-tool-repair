@@ -167,3 +167,72 @@ describe("live-schema input repair", () => {
     expect(result.repairs).toEqual([]);
   });
 });
+
+describe("native tool-call name recovery", () => {
+  const bashSchema = Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number()) });
+  const tools = [
+    { name: "read", parameters: readSchema },
+    { name: "bash", parameters: bashSchema },
+  ];
+  const callName = (message: MinimalAssistantMessage): unknown =>
+    (message.content[0] as Record<string, unknown>).name;
+
+  it("recovers an index-suffixed native tool name (issue #4)", () => {
+    const message = messageWithCall("bash_1_234456789", { command: "pwd" });
+    const result = repairAssistantToolCallInputs(message, tools);
+
+    expect(result.changed).toBe(true);
+    expect(callName(result.message)).toBe("bash");
+    expect(repairedArguments(result.message)).toEqual({ command: "pwd" });
+    expect((result.message.content[0] as Record<string, unknown>).id).toBe("call_1");
+    expect(result.repairs).toHaveLength(1);
+    expect(result.repairs[0]).toMatchObject({
+      toolName: "bash",
+      status: "recovered",
+      rulesFired: ["recoverMangledToolName"],
+    });
+  });
+
+  it("recovers Kimi call-id shaped names and still repairs the arguments", () => {
+    const message = messageWithCall("functions.read:0", { file_path: "/x", offset: null });
+    const result = repairAssistantToolCallInputs(message, tools);
+
+    expect(result.changed).toBe(true);
+    expect(callName(result.message)).toBe("read");
+    expect(repairedArguments(result.message)).toEqual({ path: "/x" });
+    expect(result.repairs[0]?.rulesFired).toEqual([
+      "recoverMangledToolName",
+      "renameAliasedField",
+      "dropNullOrUndefined",
+    ]);
+  });
+
+  it("keeps the original name when the arguments do not fit the recovered tool", () => {
+    const message = messageWithCall("bash_1", { path: "/x" });
+    const result = repairAssistantToolCallInputs(message, tools);
+
+    expect(result.changed).toBe(false);
+    expect(result.message).toBe(message);
+    expect(result.repairs[0]).toMatchObject({ toolName: "bash_1", status: "unrepairable" });
+  });
+
+  it("does not guess between tools that differ only by a numeric suffix", () => {
+    const message = messageWithCall("s3_2_1", { command: "ls" });
+    const result = repairAssistantToolCallInputs(message, [
+      { name: "s3", parameters: bashSchema },
+      { name: "s3_2", parameters: bashSchema },
+    ]);
+
+    expect(result.changed).toBe(false);
+    expect(result.repairs).toEqual([]);
+  });
+
+  it("leaves unknown names without an index suffix untouched", () => {
+    for (const name of ["bash_tool", "read_multiple_files", "functions.write:0"]) {
+      const message = messageWithCall(name, { command: "pwd" });
+      const result = repairAssistantToolCallInputs(message, tools);
+      expect(result.changed).toBe(false);
+      expect(result.repairs).toEqual([]);
+    }
+  });
+});

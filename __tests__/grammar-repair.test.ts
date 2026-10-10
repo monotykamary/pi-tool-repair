@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeGrammarRepairConfig,
   parseToolGrammarLeaks,
+  recoverMangledToolName,
   repairAssistantMessageGrammarLeaks,
   resolveGrammarRepairForModel,
   type GrammarRepairConfig,
@@ -583,5 +584,53 @@ describe("mangled tool-name recovery", () => {
     expect(result.recoveredCalls).toEqual([
       { grammar: "dsml", name: "bash", arguments: { command: "pwd" } },
     ]);
+  });
+
+  it("recovers Kimi call-id shaped names", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      leakedInvoke("functions.bash:0"),
+      enabledConfig,
+      new Set(["bash"]),
+    );
+    expect(result.recoveredCalls).toEqual([
+      { grammar: "dsml", name: "bash", arguments: { command: "pwd" } },
+    ]);
+  });
+
+  it("does not recover when the suffix matches more than one known tool", () => {
+    const result = repairAssistantMessageGrammarLeaks(
+      leakedInvoke("s3_2_1"),
+      enabledConfig,
+      new Set(["s3", "s3_2"]),
+    );
+    expect(result.recoveredCalls).toEqual([]);
+  });
+});
+
+describe("recoverMangledToolName", () => {
+  const known = new Set(["bash", "read", "read_file", "s3", "s3_2"]);
+
+  it.each([
+    ["bash_1_234456789", "bash"],
+    ["bash-2", "bash"],
+    ["bash:0", "bash"],
+    ["functions.bash:0", "bash"],
+    ["functions.bash", "bash"],
+    ["functions.read_file:12", "read_file"],
+    ["read_file_1_2", "read_file"],
+  ])("recovers %s as %s", (name, expected) => {
+    expect(recoverMangledToolName(name, known)).toBe(expected);
+  });
+
+  it.each([
+    "bash",
+    "s3_2",
+    "s3_2_1",
+    "read_multiple_files",
+    "bashful",
+    "functions.write:0",
+    "default.bash",
+  ])("returns %s unchanged", (name) => {
+    expect(recoverMangledToolName(name, known)).toBe(name);
   });
 });

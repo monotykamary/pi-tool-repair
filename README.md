@@ -38,6 +38,7 @@ Run `bun run test:host` for the offline real-host load, native codemode/nested-c
 | Bare string as root input | `"/path/to/file"` | `{"path":"/path/to/file"}` |
 | `fabric_exec` code arrays | `{"code":["const x=1;","return x;"]}` | newline-joined `code` |
 | Schema anchor bleed (Kimi K2) | `"^pattern$"` in values | `"pattern"` |
+| Index-suffixed tool names | `bash_1_234456789`, `functions.bash:0` | `bash` |
 | Leaked tool grammar (opt-in) | `<｜DSML｜tool_calls>...` | pi `toolCall` block |
 | Phantom tool use | `stopReason:"toolUse"` with no call | retryable error |
 
@@ -88,6 +89,7 @@ before_provider_request
 model response → message_end
   ├─ strip leaked grammar tokens from native toolCall blocks
   ├─ recover complete leaked grammar calls when enabled
+  ├─ recover index-suffixed tool names that match exactly one active tool
   ├─ validate raw arguments against each active tool's live schema
   ├─ apply only known aliases and schema-directed repairs
   ├─ commit a candidate only when it re-validates
@@ -111,6 +113,7 @@ Pi 0.84 validates tool arguments before emitting `tool_call`. Repair therefore r
 | `coerceNumericString` | `"20"` → `20` when the live schema expects a number |
 | `convertTimeoutMilliseconds` | `timeoutMs` → `timeout` seconds for `bash` |
 | `joinStringArray` | all-string `fabric_exec.code` arrays → one newline-joined string |
+| `recoverMangledToolName` | `bash_1_234456789` / `functions.bash:0` → `bash` when the name is not an active tool, the suffix is only digits and separators, exactly one active tool fits, and the arguments validate against it |
 
 ### Why validate-then-repair
 

@@ -170,24 +170,35 @@ export function resolveGrammarRepairForModel(
 }
 
 // Open models occasionally append index tokens to tool names (for example
-// `bash_1_234456789` for `bash`). Recover the original name only when the
-// trailing part is made up of separators and digits, and prefer the longest
-// known tool so `read_file_1_2` never collapses to `read`. Names that are
-// already known, or whose suffix contains real characters
-// (`read_multiple_files`), are returned untouched.
-const MANGLED_TOOL_SUFFIX = /^[_-\d]+$/;
+// `bash_1_234456789` for `bash`), or leak Kimi's call-id shape
+// `functions.{name}:{idx}` into the name. Recover the original name only when
+// the trailing part is made up of separators and digits and exactly one known
+// tool fits, so `read_file_1_2` never collapses to `read` and `s3_2_1` is not
+// guessed when both `s3` and `s3_2` exist. Names that are already known, or
+// whose suffix contains real characters (`read_multiple_files`), are returned
+// untouched.
+const MANGLED_TOOL_PREFIX = "functions.";
+const MANGLED_TOOL_SUFFIX = /^[-_:\d]+$/;
 
-function recoverMangledToolName(name: string, knownTools: Set<string>): string {
+export function recoverMangledToolName(name: string, knownTools: ReadonlySet<string>): string {
   if (knownTools.has(name)) return name;
 
-  let best: string | undefined;
-  for (const tool of knownTools) {
-    if (tool.length >= name.length || !name.startsWith(tool)) continue;
-    if (!MANGLED_TOOL_SUFFIX.test(name.slice(tool.length))) continue;
-    if (best === undefined || tool.length > best.length) best = tool;
+  const bases = name.startsWith(MANGLED_TOOL_PREFIX)
+    ? [name, name.slice(MANGLED_TOOL_PREFIX.length)]
+    : [name];
+  const matches = new Set<string>();
+  for (const base of bases) {
+    if (knownTools.has(base)) {
+      matches.add(base);
+      continue;
+    }
+    for (const tool of knownTools) {
+      if (tool.length >= base.length || !base.startsWith(tool)) continue;
+      if (MANGLED_TOOL_SUFFIX.test(base.slice(tool.length))) matches.add(tool);
+    }
   }
 
-  return best ?? name;
+  return matches.size === 1 ? [...matches][0]! : name;
 }
 
 export function repairAssistantMessageGrammarLeaks(
