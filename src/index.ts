@@ -996,6 +996,25 @@ export function repairAssistantToolCallInputs(
     : { changed: false, message, repairs };
 }
 
+// Picks the tool for a recovered call whose name was lost (headless DSML).
+// Returns a name only when exactly one active tool declares every argument and
+// accepts the arguments, directly or after the usual repairs; any ambiguity
+// (e.g. `{path}` fits both `read` and `ls`) returns undefined so nothing runs.
+export function inferToolNameFromArguments(
+  args: Record<string, unknown>,
+  tools: readonly LiveToolSchema[],
+): string | undefined {
+  const keys = Object.keys(args);
+  if (keys.length === 0) return undefined;
+  const matches = tools.filter((tool) => {
+    const properties = schemaProperties(tool.parameters);
+    if (!keys.every((key) => Object.hasOwn(properties, key))) return false;
+    if (schemaCheck(tool.parameters, args) === true) return true;
+    return repairInputAgainstLiveSchema(tool.name, args, tool.parameters).status === "recovered";
+  });
+  return matches.length === 1 ? matches[0]!.name : undefined;
+}
+
 // Logging
 
 export * from "./grammar-repair.js";

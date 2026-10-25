@@ -42,6 +42,7 @@ export interface RecoveredToolCall {
 interface Candidate extends RecoveredToolCall {
   range: Range;
   stripOnly?: boolean;
+  inferName?: boolean;
 }
 
 interface Range {
@@ -205,6 +206,7 @@ export function repairAssistantMessageGrammarLeaks(
   message: MinimalAssistantMessage,
   config: GrammarRepairConfig,
   knownTools: Set<string> = new Set(),
+  inferToolName?: (args: Record<string, unknown>) => string | undefined,
 ): GrammarRepairResult {
   if (!config.enabled || message.role !== "assistant" || !Array.isArray(message.content)) {
     return { changed: false, recoveredCalls: [], strippedRanges: 0, message };
@@ -215,12 +217,23 @@ export function repairAssistantMessageGrammarLeaks(
   const recoveredCalls: RecoveredToolCall[] = [];
   let strippedRanges = 0;
   let changed = false;
+  let droppedHeadlessCall = false;
 
   const nextContent = message.content.map((part) => {
     const text = getPartText(part);
     if (text === undefined) return part;
 
     const candidates = selectCandidates(parseToolGrammarCandidates(text, enabled))
+      .map((candidate) => {
+        // Headless DSML: the provider swallowed the invoke opener, so the tool
+        // name is unknown. Infer it from the arguments only when exactly one
+        // active tool accepts them; otherwise strip the fragment without executing.
+        if (!candidate.inferName) return candidate;
+        const inferred = inferToolName?.(candidate.arguments);
+        if (inferred) return { ...candidate, name: inferred, inferName: false };
+        droppedHeadlessCall = true;
+        return { ...candidate, stripOnly: true };
+      })
       .map((candidate) => {
         const name = recoverMangledToolName(candidate.name, knownTools);
         return name === candidate.name ? candidate : { ...candidate, name };
@@ -283,6 +296,13 @@ export function repairAssistantMessageGrammarLeaks(
 
   if (shouldRecover) {
     nextMessage.stopReason = "toolUse";
+  } else if (droppedHeadlessCall && existingToolCalls.length === 0) {
+    // The model tried to call a tool but the provider lost its name, so the
+    // call cannot run. Surface it as an interrupted stream, which Pi's
+    // auto-retry treats as transient, instead of silently ending the turn.
+    nextMessage.stopReason = "error";
+    nextMessage.errorMessage =
+      "upstream stream was interrupted: provider dropped the DSML tool-call header (pi-tool-repair)";
   }
 
   return {
@@ -308,6 +328,7 @@ function parseToolGrammarCandidates(text: string, enabled: Set<GrammarName>): Ca
   const candidates: Candidate[] = [];
   if (enabled.has("dsml")) {
     candidates.push(...parseDsml(text));
+    candidates.push(...parseDsmlHeadless(text));
     candidates.push(...parseDsmlDanglingMarkers(text));
   }
   if (enabled.has("kimi")) candidates.push(...parseKimi(text));
@@ -332,16 +353,21 @@ function parseToolGrammarCandidates(text: string, enabled: Set<GrammarName>): Ca
   return candidates.filter((candidate) => candidate.range.end > candidate.range.start);
 }
 
+// DeepSeek emits `｜DSML｜` markers; some OpenRouter backends add a space after
+// the closing bar (`<｜DSML｜ parameter`) and shorten the outer tag to `calls`.
+const DSML_PREFIX = "(?:｜{1,2}\\s*DSML\\s*｜{1,2}|DSML\\s*｜|\\s*\\|\\s*DSML\\s*\\|)\\s*";
+const DSML_OUTER = "(?:tool_calls|function_calls|calls)";
+
 function parseDsml(text: string): Candidate[] {
   const candidates: Candidate[] = [];
-  const prefix = "(?:｜{1,2}DSML｜{1,2}|DSML｜|\\s*\\|\\s*DSML\\s*\\|\\s*)";
-  const outerOpen = new RegExp(`<${prefix}(?:tool_calls|function_calls)>`, "giu");
+  const prefix = DSML_PREFIX;
+  const outerOpen = new RegExp(`<${prefix}${DSML_OUTER}>`, "giu");
 
   for (const match of text.matchAll(outerOpen)) {
     if (match.index === undefined || isInsideCodeFence(text, match.index)) continue;
     const start = match.index;
     const bodyStart = start + match[0].length;
-    const close = findDsmlClose(text, bodyStart, "tool_calls") ?? findDsmlClose(text, bodyStart, "function_calls");
+    const close = findDsmlClose(text, bodyStart, DSML_OUTER);
     const end = close ? close.end : findBestUnclosedDsmlEnd(text, bodyStart);
     if (end === undefined) continue;
     const body = text.slice(bodyStart, close ? close.start : end);
@@ -354,11 +380,49 @@ function parseDsml(text: string): Candidate[] {
   return candidates;
 }
 
+// Some backends consume the `<｜DSML｜tool_calls>` and `<｜DSML｜invoke name=...>`
+// openers and pass through only the parameters and closers. Recover the
+// arguments and let the caller infer the tool name from the active schemas.
+function parseDsmlHeadless(text: string): Candidate[] {
+  if (!text.includes("DSML")) return [];
+  const prefix = DSML_PREFIX;
+  if (new RegExp(`<${prefix}invoke\\s+name=`, "iu").test(text)) return [];
+
+  const candidates: Candidate[] = [];
+  const invokeClose = new RegExp(`</${prefix}invoke>`, "giu");
+  const paramOpen = new RegExp(`<(?:${prefix})?parameter\\s+name=`, "giu");
+  let from = 0;
+  for (const close of text.matchAll(invokeClose)) {
+    if (close.index === undefined || close.index < from) continue;
+    if (isInsideCodeFence(text, close.index)) continue;
+    paramOpen.lastIndex = from;
+    const firstParam = paramOpen.exec(text);
+    if (!firstParam || firstParam.index >= close.index) continue;
+
+    const start = firstParam.index;
+    const invokeEnd = close.index + close[0].length;
+    const outer = findDsmlClose(text, invokeEnd, DSML_OUTER);
+    const between = outer ? text.slice(invokeEnd, outer.start) : "";
+    const end = outer && /^\s*$/u.test(between) ? outer.end : invokeEnd;
+    const args = parseDsmlArguments(text.slice(start, close.index), false);
+    const hasArgs = Object.keys(args).length > 0;
+    candidates.push({
+      name: "",
+      arguments: args,
+      grammar: "dsml",
+      range: { start, end },
+      ...(hasArgs ? { inferName: true } : { stripOnly: true }),
+    });
+    from = end;
+  }
+  return candidates;
+}
+
 function parseDsmlDanglingMarkers(text: string): Candidate[] {
   if (!text.includes("DSML")) return [];
-  const prefix = "(?:｜{1,2}DSML｜{1,2}|DSML｜|\\s*\\|\\s*DSML\\s*\\|\\s*)";
+  const prefix = DSML_PREFIX;
   const markerRe = new RegExp(
-    `</?${prefix}(?:tool_calls|function_calls|invoke|parameter)(?:\\s+[^>\\n]*)?>?`,
+    `</?${prefix}(?:${DSML_OUTER.slice(3, -1)}|invoke|parameter)(?:\\s+[^>\\n]*)?>?`,
     "giu",
   );
   const candidates: Candidate[] = [];
@@ -377,7 +441,7 @@ function parseDsmlDanglingMarkers(text: string): Candidate[] {
 }
 
 function findDsmlClose(text: string, from: number, outerName: string): Range | undefined {
-  const prefix = "(?:｜{1,2}DSML｜{1,2}|DSML｜|\\s*\\|\\s*DSML\\s*\\|\\s*)";
+  const prefix = DSML_PREFIX;
   const closeRe = new RegExp(`</${prefix}${outerName}>`, "giu");
   closeRe.lastIndex = from;
   const match = closeRe.exec(text);
@@ -385,7 +449,7 @@ function findDsmlClose(text: string, from: number, outerName: string): Range | u
 }
 
 function findBestUnclosedDsmlEnd(text: string, from: number): number | undefined {
-  const invokeClose = /<\/(?:｜{1,2}DSML｜{1,2}|DSML｜|\s*\|\s*DSML\s*\|\s*)invoke>/giu;
+  const invokeClose = new RegExp(`</${DSML_PREFIX}invoke>`, "giu");
   invokeClose.lastIndex = from;
   let end: number | undefined;
   for (;;) {
@@ -398,7 +462,7 @@ function findBestUnclosedDsmlEnd(text: string, from: number): number | undefined
 
 function parseDsmlInvokes(body: string): Array<Omit<Candidate, "range" | "grammar">> {
   const calls: Array<Omit<Candidate, "range" | "grammar">> = [];
-  const prefix = "(?:｜{1,2}DSML｜{1,2}|DSML｜|\\s*\\|\\s*DSML\\s*\\|\\s*)";
+  const prefix = DSML_PREFIX;
   const invokeRe = new RegExp(`<${prefix}invoke\\s+name=["']([^"']+)["']\\s*>`, "giu");
 
   for (const match of body.matchAll(invokeRe)) {
@@ -415,11 +479,15 @@ function parseDsmlInvokes(body: string): Array<Omit<Candidate, "range" | "gramma
   return calls;
 }
 
-function parseDsmlArguments(body: string): Record<string, unknown> {
+function parseDsmlArguments(body: string, allowJsonFallback = true): Record<string, unknown> {
   const args: Record<string, unknown> = {};
-  const prefix = "(?:｜{1,2}DSML｜{1,2}|DSML｜|\\s*\\|\\s*DSML\\s*\\|\\s*)";
+  const prefix = DSML_PREFIX;
+  // The opener's DSML prefix is optional because backends sometimes strip it
+  // (`<parameter name="path">...</｜DSML｜ parameter>`). A value may not span
+  // another parameter opener, so a stray bare opener cannot swallow the next one.
   const paramRe = new RegExp(
-    `<${prefix}parameter\\s+name=["']([^"']+)["'](?:\\s+string=["'](true|false)["'])?\\s*>([\\s\\S]*?)</${prefix}parameter>`,
+    `<(?:${prefix})?parameter\\s+name=["']([^"']+)["'](?:\\s+string=["'](true|false)["'])?\\s*>` +
+    `((?:(?!<(?:${prefix})?parameter\\s+name=)[\\s\\S])*?)</${prefix}parameter>`,
     "giu",
   );
 
@@ -432,6 +500,7 @@ function parseDsmlArguments(body: string): Record<string, unknown> {
   }
 
   if (Object.keys(args).length > 0) return args;
+  if (!allowJsonFallback) return args;
 
   const direct = parseJsonObject(extractFirstBalancedJson(body.trim())?.json ?? body.trim());
   return normalizeArgumentsObject(direct) ?? {};

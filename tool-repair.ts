@@ -19,6 +19,7 @@ import {
   repairAssistantMessageGrammarLeaks,
   resolveGrammarRepairForModel,
   repairAssistantToolCallInputs,
+  inferToolNameFromArguments,
   normalizePhantomToolUse,
   type MinimalAssistantMessage,
 } from "./src/index.js";
@@ -124,10 +125,12 @@ export default function (pi: ExtensionAPI) {
         safeGetActiveTools(pi)
           .filter((name): name is string => typeof name === "string" && name.length > 0),
       );
+      const activeSchemas = safeGetActiveToolSchemas(pi);
       const grammarResult = repairAssistantMessageGrammarLeaks(
         message,
         effectiveGrammarRepairConfig,
         knownTools,
+        (args) => inferToolNameFromArguments(args, activeSchemas),
       );
       if (grammarResult.changed) {
         message = grammarResult.message;
